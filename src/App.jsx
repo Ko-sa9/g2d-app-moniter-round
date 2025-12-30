@@ -1,0 +1,1112 @@
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { 
+  Download, CheckCircle, AlertTriangle, Save, Search, X, ChevronRight, 
+  Activity, Filter, MapPin, Monitor, Settings, User, Plus, Trash2, Edit2, 
+  History, LogOut, FileText, ChevronDown, ChevronUp, ArrowRight, ArrowLeft,
+  Server, Grid, Layers, Menu, BarChart2, Calendar, AlertOctagon, HelpCircle,
+  Cloud
+} from 'lucide-react';
+
+import { initializeApp } from "firebase/app";
+import { 
+  getFirestore, collection, doc, setDoc, getDocs, deleteDoc, 
+  query, where, onSnapshot, writeBatch, orderBy
+} from "firebase/firestore";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+
+// ==========================================
+// ★★★ ここにFirebaseの設定を貼り付けてください ★★★
+const firebaseConfig = {
+  apiKey: "AIzaSyDrH91q6Xl-WtSnyjlkJ19tovcvqBnIYFo",
+  authDomain: "g2d-app-89646.firebaseapp.com",
+  projectId: "g2d-app-89646",
+  storageBucket: "g2d-app-89646.firebasestorage.app",
+  messagingSenderId: "1018039229154",
+  appId: "1:1018039229154:web:4a52ece7e4185b818adcbb"
+};
+// ==========================================
+
+// Firebase Init
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = 'checklist-app-v1';
+
+// --- 初期データ ---
+const INITIAL_MODELS = [
+  { id: 'ZS-630P', name: 'ZS-630P', type: 'TRANSMITTER' },
+  { id: 'WEP-1400', name: 'WEP-1400', type: 'MONITOR' },
+  { id: 'WEP-4204', name: 'WEP-4204', type: 'MONITOR' },
+  { id: 'WEP-5204', name: 'WEP-5204', type: 'MONITOR' },
+];
+
+const INITIAL_DEVICES = [
+  // 3A病棟
+  { id: '1001', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
+  { id: '1004', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
+  { id: '1015', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
+  { id: '1021', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
+  { id: '1042', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
+  { id: '1049', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
+  { id: '1054', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
+  { id: '1072', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
+  { id: '1009', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00503)' },
+  { id: '1027', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00503)' },
+  { id: '1032', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00503)' },
+  { id: '1039', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00503)' },
+  // 4F病棟
+  { id: '2108', ward: '4F病棟', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00310)' },
+  // 君津1FHD
+  { id: '2023', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (02281)' },
+  { id: '2054', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (02281)' },
+  { id: '2112', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (02281)' },
+  { id: '6029', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (02281)' },
+  { id: '5009', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (03928)' },
+  { id: '5032', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (03928)' },
+  { id: '5060', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (03928)' },
+  { id: '5077', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (03928)' },
+  // 坂田HD
+  { id: '2035', ward: '坂田HD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00121)' },
+  { id: '2049', ward: '坂田HD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00121)' },
+  { id: '6067', ward: '坂田HD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00121)' },
+  // 2F病棟
+  { id: '5008', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (05397)' },
+  { id: '5026', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (05397)' },
+  { id: '5031', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (05397)' },
+  { id: '5038', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (05397)' },
+  { id: '4025', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (03486)' },
+  { id: '4030', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (03486)' },
+  { id: '4037', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (03486)' },
+  { id: '4058', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (03486)' },
+  { id: '1007', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
+  { id: '1025', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
+  { id: '1030', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
+  { id: '1037', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
+  { id: '1058', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
+  { id: '1062', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
+  { id: '1075', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
+  { id: '1078', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
+  // 3F透析室
+  { id: '3001', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00770)' },
+  { id: '3010', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00770)' },
+  { id: '3035', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00770)' },
+  { id: '4005', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-4204 (006745)' },
+  { id: '6034', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-4204 (006745)' },
+  { id: '6017', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-5204 (01294)' },
+  { id: '6019', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-5204 (01294)' },
+  { id: '6047', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-5204 (01294)' },
+].map((d, i) => ({ ...d, sortOrder: i }));
+
+const INITIAL_STAFF = [
+  { id: '1', name: '管理者' },
+  { id: '2', name: 'スタッフA' },
+  { id: '3', name: 'スタッフB' },
+];
+
+function App() {
+  const [user, setUser] = useState(null);
+  const [currentStaff, setCurrentStaff] = useState('');
+  
+  const [devices, setDevices] = useState([]);
+  const [staffList, setStaffList] = useState([]);
+  const [transmitterModels, setTransmitterModels] = useState([]);
+  const [records, setRecords] = useState({});
+
+  const [selectedWard, setSelectedWard] = useState(null);
+  const [selectedDevice, setSelectedDevice] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [showConfirmSave, setShowConfirmSave] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  
+  const today = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
+
+  useEffect(() => {
+    const init = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (e) {
+        console.error("Auth Error", e);
+        alert("認証エラー: Firebase設定を確認してください");
+      }
+    };
+    init();
+    return onAuthStateChanged(auth, setUser);
+  }, []);
+
+  // Data Sync
+  useEffect(() => {
+    if (!user) return;
+    
+    // 1. Devices
+    const unsubDevices = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'devices'), (snapshot) => {
+      if (snapshot.empty) {
+        INITIAL_DEVICES.forEach(d => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'devices', d.id), d));
+        setDevices(INITIAL_DEVICES);
+      } else {
+        const list = snapshot.docs.map(d => d.data());
+        list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999) || a.id.localeCompare(b.id));
+        setDevices(list);
+      }
+    });
+
+    // 2. Staff
+    const unsubStaff = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'staff'), (snapshot) => {
+      if (snapshot.empty) {
+        INITIAL_STAFF.forEach(s => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'staff', s.id), s));
+        setStaffList(INITIAL_STAFF);
+      } else {
+        setStaffList(snapshot.docs.map(d => d.data()));
+      }
+    });
+
+    // 3. Models
+    const unsubModels = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'transmitter_models'), (snapshot) => {
+      if (snapshot.empty) {
+        INITIAL_MODELS.forEach(m => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', m.id), m));
+        setTransmitterModels(INITIAL_MODELS);
+      } else {
+        setTransmitterModels(snapshot.docs.map(d => d.data()));
+      }
+    });
+
+    // 4. Checks
+    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'), where('date', '==', today));
+    const unsubChecks = onSnapshot(q, (snapshot) => {
+      const recs = {};
+      snapshot.docs.forEach(d => { recs[d.data().deviceId] = d.data(); });
+      setRecords(recs);
+    });
+
+    return () => { unsubDevices(); unsubStaff(); unsubModels(); unsubChecks(); };
+  }, [user]);
+
+  // --- Helpers ---
+  const wards = useMemo(() => {
+    const list = Array.from(new Set(devices.map(d => d.ward)));
+    const order = ['3A病棟', '4F病棟', '2F病棟', '3F透析室', '君津1FHD', '坂田HD'];
+    return list.sort((a, b) => {
+      const indexA = order.indexOf(a);
+      const indexB = order.indexOf(b);
+      if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+      return a.localeCompare(b);
+    });
+  }, [devices]);
+
+  const filteredDevices = useMemo(() => {
+    let list = devices;
+    if (selectedWard) list = list.filter(d => d.ward === selectedWard);
+    if (searchTerm) list = list.filter(d => d.id.includes(searchTerm) || d.model.includes(searchTerm) || d.monitorGroup.includes(searchTerm));
+    return list;
+  }, [selectedWard, searchTerm, devices]);
+
+  const groupedDevices = useMemo(() => {
+    if (!selectedWard || searchTerm) return null;
+    const groups = {};
+    filteredDevices.forEach(device => {
+      if (!groups[device.monitorGroup]) groups[device.monitorGroup] = [];
+      groups[device.monitorGroup].push(device);
+    });
+    return groups;
+  }, [selectedWard, searchTerm, filteredDevices]);
+
+  const progress = useMemo(() => {
+    if (filteredDevices.length === 0) return 0;
+    const checkedCount = filteredDevices.filter(d => records[d.id]).length;
+    return Math.round((checkedCount / filteredDevices.length) * 100);
+  }, [filteredDevices, records]);
+
+  // CSV出力
+  const handleDownloadCSV = (targetRecords, fileNameDate) => {
+    const list = Array.isArray(targetRecords) ? targetRecords : Object.values(targetRecords);
+    const header = ['点検日', '時間', '病棟', '点検者', 'モニタ', 'ch', '送信機型番', '①使用中', '②受信状態', '不良理由', '備考', '③破損', '④ch確認'];
+    const rows = list.map(r => {
+      const deviceMaster = devices.find(d => d.id === r.deviceId);
+      const model = r.model || deviceMaster?.model || '';
+      const monitor = r.monitorGroup || deviceMaster?.monitorGroup || '';
+      const ward = r.ward || deviceMaster?.ward || '';
+      let badReason = '';
+      if (r.reception === 'BAD') {
+        const reasonMap = { A: '電波切れ', B: '電極確認', C: '一時退床中', D: 'その他' };
+        badReason = reasonMap[r.receptionReason || ''] || '';
+        if (r.receptionReason === 'D' && r.receptionNote) badReason += `(${r.receptionNote})`;
+      }
+      return [
+        r.date, r.timestamp.split(' ')[1] || '', ward, r.checker, monitor, r.deviceId, model,
+        r.inUse === 'YES' ? '使用中' : '未使用',
+        r.reception === 'GOOD' ? '良好' : (r.reception === 'BAD' ? '不良' : '-'),
+        badReason, `"${r.note || ''}"`,
+        r.isBroken === 'YES' ? '破損あり' : (r.isBroken === 'NO' ? 'なし' : '-'),
+        r.channelCheck === 'OK' ? 'OK' : (r.channelCheck === 'NG' ? 'NG' : '-'),
+      ].join(',');
+    });
+
+    const csvContent = "data:text/csv;charset=utf-8," + [header.join(','), ...rows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `送信機点検結果_${fileNameDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const executeSave = () => {
+    setShowConfirmSave(false);
+    alert('本日の点検記録を完了しました。\n(データは履歴に自動保存されています)');
+  };
+
+  if (!user) return <div className="flex h-screen items-center justify-center">Loading...</div>;
+
+  return (
+    <div className="flex flex-col h-screen bg-gray-50 text-gray-800 font-sans">
+      {/* Header */}
+      <header className="bg-blue-600 text-white p-3 shadow-md sticky top-0 z-10">
+        <div className="max-w-3xl mx-auto w-full flex flex-col gap-2">
+          <div className="flex justify-between items-center">
+            <h1 className="text-lg font-bold flex items-center gap-2"><Activity size={20} /> 送信機チェック</h1>
+            <div className="flex gap-2">
+              <button onClick={() => setShowHistory(true)} className="p-2 hover:bg-blue-500 rounded-full transition-colors flex items-center gap-1" title="履歴・分析">
+                <BarChart2 size={20} /><span className="text-xs font-bold hidden sm:inline">履歴</span>
+              </button>
+              <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-blue-500 rounded-full transition-colors" title="設定"><Settings size={20} /></button>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 bg-blue-700 p-2 rounded-lg text-sm">
+            <User size={16} className="text-blue-200" /><span className="whitespace-nowrap">点検者:</span>
+            <select value={currentStaff} onChange={(e) => setCurrentStaff(e.target.value)} className="bg-blue-600 border border-blue-400 text-white rounded px-2 py-1 text-sm flex-1 focus:outline-none focus:ring-1 focus:ring-white">
+              <option value="">未選択</option>
+              {staffList.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+            </select>
+          </div>
+        </div>
+      </header>
+
+      {/* Main */}
+      <main className="flex-1 overflow-y-auto p-4">
+        <div className="max-w-3xl mx-auto w-full space-y-6">
+          {!selectedWard ? (
+            <div className="space-y-4 animate-fade-in">
+              <div className="flex items-center gap-2 mb-2"><MapPin size={18} className="text-blue-600" /><h2 className="text-md font-bold text-gray-700">病棟を選択してください</h2></div>
+              <div className="grid grid-cols-2 gap-3">
+                {wards.map(ward => (
+                  <button key={ward} onClick={() => setSelectedWard(ward)} className="p-4 bg-white rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all active:scale-95 text-left group">
+                    <span className="block text-lg font-bold text-gray-800 group-hover:text-blue-600">{ward}</span>
+                    <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full mt-1 inline-block">{devices.filter(d => d.ward === ward).length}台</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4 animate-slide-up">
+              <div className="flex justify-between items-center">
+                <button onClick={() => setSelectedWard(null)} className="text-sm text-blue-600 hover:underline flex items-center gap-1 pl-1"><ChevronRight size={16} className="rotate-180" /> 病棟選択に戻る</button>
+                <div className="text-sm font-bold bg-white px-3 py-1 rounded-full shadow-sm border text-gray-600">{selectedWard}</div>
+              </div>
+              {/* Search & Progress */}
+              <div className="bg-white p-3 rounded-lg shadow-sm space-y-3 sticky top-0 z-0 border border-gray-100">
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 text-gray-400" size={18} />
+                  <input type="text" placeholder="ch または モニタ番号で検索" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 bg-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-300 text-sm transition-all" />
+                  {searchTerm && <button onClick={() => setSearchTerm('')} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"><X size={18}/></button>}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden"><div className="h-full bg-green-500 transition-all duration-500 ease-out" style={{ width: `${progress}%` }} /></div>
+                  <span className="font-mono">{progress}%</span>
+                </div>
+              </div>
+              {/* Device List */}
+              <div className="space-y-6 pb-24">
+                {groupedDevices && !searchTerm ? (
+                  Object.entries(groupedDevices).map(([groupName, groupDevices]) => (
+                    <div key={groupName} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                      <div className="bg-gray-100 px-4 py-2 border-b border-gray-200 flex items-center gap-2">
+                        <Monitor size={16} className="text-gray-500" /><span className="font-bold text-sm text-gray-700 font-mono">{groupName}</span>
+                      </div>
+                      <div className="divide-y divide-gray-100">
+                        {groupDevices.map(device => (
+                          <DeviceRow key={device.id} device={device} record={records[device.id]} onClick={() => setSelectedDevice(device)} />
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden divide-y divide-gray-100">
+                    {filteredDevices.map(device => <DeviceRow key={device.id} device={device} record={records[device.id]} onClick={() => setSelectedDevice(device)} />)}
+                  </div>
+                )}
+                {filteredDevices.length === 0 && <div className="text-center py-10 text-gray-400 text-sm">該当する機器が見つかりません</div>}
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+      
+      {/* Footer */}
+      {Object.keys(records).length > 0 && (
+        <div className="bg-white p-4 border-t sticky bottom-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] safe-area-bottom z-10">
+          <div className="max-w-3xl mx-auto flex justify-between items-center">
+            <div className="flex flex-col">
+              <div className="text-xs text-gray-500"><span className="font-bold text-gray-800 text-base mr-1">{Object.keys(records).length}</span>件 記録済</div>
+              <div className="text-[10px] text-green-600 flex items-center gap-1 font-bold animate-pulse"><Cloud size={12}/> 自動保存済み</div>
+            </div>
+            <button onClick={() => setShowConfirmSave(true)} className="flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-lg font-bold shadow hover:bg-blue-700 active:scale-95 transition-transform">
+              <CheckCircle size={20} /> 本日の点検完了
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modals */}
+      {selectedDevice && (
+        <CheckModal 
+          device={selectedDevice} initialData={records[selectedDevice.id]} checker={currentStaff}
+          onClose={() => setSelectedDevice(null)}
+          onSave={async (record) => {
+            const docId = `${record.date}_${record.deviceId}`;
+            const recordWithSnapshot = { ...record, model: selectedDevice.model, monitorGroup: selectedDevice.monitorGroup, ward: selectedDevice.ward };
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId), recordWithSnapshot);
+            setSelectedDevice(null);
+          }}
+        />
+      )}
+
+      {showConfirmSave && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white w-full max-w-sm rounded-xl shadow-2xl p-6 animate-scale-in">
+            <div className="flex items-center gap-2 mb-4 text-blue-600"><HelpCircle size={28}/><h3 className="text-lg font-bold">完了の確認</h3></div>
+            <p className="text-gray-800 font-bold mb-2">本日の点検記録を履歴に保存しますか？</p>
+            <p className="text-xs text-gray-500 mb-6 bg-gray-50 p-2 rounded">※データは都度自動保存されていますが、区切りとして記録します。</p>
+            <div className="flex gap-3">
+              <button onClick={() => setShowConfirmSave(false)} className="flex-1 py-3 border rounded-lg text-gray-600 hover:bg-gray-50 font-bold">キャンセル</button>
+              <button onClick={executeSave} className="flex-1 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold shadow-md">保存する</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSettings && <SettingsModal devices={devices} staffList={staffList} transmitterModels={transmitterModels} onClose={() => setShowSettings(false)} />}
+      {showHistory && <HistoryModal onClose={() => setShowHistory(false)} onDownloadCSV={handleDownloadCSV} />}
+    </div>
+  );
+}
+
+// --- Sub Components ---
+
+function DeviceRow({ device, record, onClick }) {
+  const isChecked = !!record;
+  let hasIssue = false;
+  if (record) {
+    if (record.inUse === 'YES' && record.reception === 'BAD') hasIssue = true;
+    if (record.inUse === 'NO' && (record.isBroken === 'YES' || record.channelCheck === 'NG')) hasIssue = true;
+  }
+  return (
+    <div onClick={onClick} className={`p-4 flex justify-between items-center cursor-pointer transition-all active:bg-gray-50 ${isChecked && hasIssue ? 'bg-red-50' : ''} ${isChecked && !hasIssue ? 'bg-green-50' : ''}`}>
+      <div>
+        <div className="flex items-center gap-2">
+          <span className={`text-xl font-bold font-mono ${isChecked ? (hasIssue ? 'text-red-700' : 'text-green-700') : 'text-gray-800'}`}>ch: {device.id}</span>
+          {isChecked && !hasIssue && <CheckCircle size={18} className="text-green-600" />}
+          {hasIssue && <AlertTriangle size={18} className="text-red-500" />}
+        </div>
+        <div className="text-xs text-gray-500 mt-1 ml-1">{device.model}</div>
+      </div>
+      <div className="flex items-center text-gray-400">
+        {isChecked ? (
+          hasIssue 
+            ? <span className="text-xs font-bold text-red-700 mr-2 bg-red-100 px-2 py-1 rounded border border-red-200">要確認</span>
+            : <span className="text-xs font-bold text-green-700 mr-2 bg-green-100 px-2 py-1 rounded border border-green-200">点検済</span>
+        ) : (
+          <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded mr-2 border border-gray-200">未実施</span>
+        )}
+        <ChevronRight size={20} />
+      </div>
+    </div>
+  );
+}
+
+function CheckModal({ device, initialData, checker, onClose, onSave }) {
+  const [inUse, setInUse] = useState(initialData?.inUse || null);
+  const [reception, setReception] = useState(initialData?.reception || 'GOOD');
+  const [receptionReason, setReceptionReason] = useState(initialData?.receptionReason || 'A');
+  const [receptionNote, setReceptionNote] = useState(initialData?.receptionNote || '');
+  const [isBroken, setIsBroken] = useState(initialData?.isBroken || '-');
+  const [channelCheck, setChannelCheck] = useState(initialData?.channelCheck || '-');
+  const [note, setNote] = useState(initialData?.note || '');
+
+  useEffect(() => {
+    if (inUse === 'YES') {
+      setIsBroken('-'); setChannelCheck('-');
+      if (reception === '-') setReception('GOOD');
+    } else if (inUse === 'NO') {
+      setReception('-');
+      if (isBroken === '-') setIsBroken('NO');
+      if (channelCheck === '-') setChannelCheck('OK');
+    }
+  }, [inUse]);
+
+  const handleSave = () => {
+    if (inUse === null) { alert('「①使用中ですか？」のどちらかを選択してください'); return; }
+    onSave({
+      deviceId: device.id, ward: device.ward,
+      date: new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-'),
+      timestamp: new Date().toLocaleString('ja-JP'), checker: checker || '',
+      inUse, reception: inUse === 'YES' ? reception : '-',
+      receptionReason: (inUse === 'YES' && reception === 'BAD') ? receptionReason : null,
+      receptionNote: (inUse === 'YES' && reception === 'BAD' && receptionReason === 'D') ? receptionNote : null,
+      isBroken: inUse === 'NO' ? isBroken : '-', channelCheck: inUse === 'NO' ? channelCheck : '-',
+      note
+    });
+  };
+  
+  const isSelectionRequired = inUse === null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
+      <div className="bg-white w-full max-w-md rounded-xl shadow-2xl overflow-hidden animate-slide-up flex flex-col max-h-[90vh]">
+        <div className="bg-gray-50 p-4 border-b flex justify-between items-center shrink-0">
+          <div>
+            <div className="text-xs text-gray-500 flex items-center gap-1 mb-1"><MapPin size={12}/> {device.ward} <span className="text-gray-300">|</span> <Monitor size={12}/> {device.monitorGroup}</div>
+            <div className="text-3xl font-bold text-gray-800 font-mono tracking-tight">ch: {device.id}</div>
+            <div className="text-xs text-blue-600 font-bold mt-1">点検者: {checker || '(未選択)'}</div>
+          </div>
+          <button onClick={onClose} className="p-2 bg-gray-200 rounded-full hover:bg-gray-300 transition-colors"><X size={20}/></button>
+        </div>
+        <div className="p-5 space-y-6 overflow-y-auto flex-1">
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-gray-700 block flex items-center gap-2"><span className="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span> 使用中ですか？</label>
+            <div className="grid grid-cols-2 gap-3">
+              <SelectionButton label="使用中" selected={inUse === 'YES'} onClick={() => setInUse('YES')} color="blue" />
+              <SelectionButton label="未使用" selected={inUse === 'NO'} onClick={() => setInUse('NO')} color="gray" />
+            </div>
+          </div>
+          <div className={`space-y-2 transition-all ${inUse !== 'YES' ? 'opacity-30 grayscale pointer-events-none' : ''}`}>
+            <label className="text-sm font-bold text-gray-700 block flex items-center gap-2"><span className="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs">2</span> 受信状態</label>
+            <div className="grid grid-cols-2 gap-3">
+              <SelectionButton label="良好" selected={reception === 'GOOD'} onClick={() => setReception('GOOD')} color="green" />
+              <SelectionButton label="不良" selected={reception === 'BAD'} onClick={() => setReception('BAD')} color="red" />
+            </div>
+            {inUse === 'YES' && reception === 'BAD' && (
+              <div className="mt-3 bg-red-50 p-3 rounded-lg border border-red-100 space-y-2 animate-fade-in">
+                <p className="text-xs font-bold text-red-700">不良の理由を選択:</p>
+                <div className="grid grid-cols-1 gap-2">
+                  {[{ val: 'A', label: 'A: 電波切れ' }, { val: 'B', label: 'B: 電極確認' }, { val: 'C', label: 'C: 一時退床中' }, { val: 'D', label: 'D: その他' }].map(opt => (
+                    <label key={opt.val} className="flex items-center gap-2 p-2 bg-white rounded border cursor-pointer hover:bg-gray-50">
+                      <input type="radio" name="reason" checked={receptionReason === opt.val} onChange={() => setReceptionReason(opt.val)} className="text-red-600 focus:ring-red-500" />
+                      <span className="text-sm text-gray-700">{opt.label}</span>
+                    </label>
+                  ))}
+                </div>
+                {receptionReason === 'D' && <input type="text" placeholder="理由を記入..." value={receptionNote} onChange={(e) => setReceptionNote(e.target.value)} className="w-full p-2 text-sm border rounded focus:outline-none focus:ring-2 focus:ring-red-300" />}
+              </div>
+            )}
+          </div>
+          <hr className="border-gray-100" />
+          <div className={`space-y-6 transition-all ${inUse !== 'NO' ? 'opacity-30 grayscale pointer-events-none' : ''}`}>
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-gray-700 block flex items-center gap-2"><span className="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs">3</span> 本体の破損</label>
+              <div className="grid grid-cols-2 gap-3">
+                <SelectionButton label="なし" selected={isBroken === 'NO'} onClick={() => setIsBroken('NO')} color="green" />
+                <SelectionButton label="破損あり" selected={isBroken === 'YES'} onClick={() => setIsBroken('YES')} color="red" icon={React.createElement(AlertTriangle, {size:16})} />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-gray-700 block flex items-center gap-2"><span className="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs">4</span> ch設定確認</label>
+              <div className="grid grid-cols-2 gap-3">
+                <SelectionButton label="OK (合致)" selected={channelCheck === 'OK'} onClick={() => setChannelCheck('OK')} color="green" />
+                <SelectionButton label="NG (不一致)" selected={channelCheck === 'NG'} onClick={() => setChannelCheck('NG')} color="red" />
+              </div>
+            </div>
+          </div>
+          <div className="space-y-2 pt-2 border-t border-dashed">
+            <label className="text-sm font-bold text-gray-700 block">備考</label>
+            <textarea className="w-full p-3 border rounded-lg text-sm focus:ring-2 focus:ring-blue-300 focus:border-blue-300 focus:outline-none transition-shadow bg-gray-50" rows={2} placeholder="特記事項があれば入力してください..." value={note} onChange={(e) => setNote(e.target.value)} />
+          </div>
+        </div>
+        <div className="p-4 border-t bg-gray-50 shrink-0 safe-area-bottom">
+          <button onClick={handleSave} disabled={isSelectionRequired} className={`w-full text-white font-bold py-3.5 rounded-xl shadow-md transition-all flex justify-center items-center gap-2 ${isSelectionRequired ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 hover:shadow-lg active:scale-[0.98]'}`}>
+            <Save size={20} /> 点検結果を保存
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SelectionButton({ label, selected, onClick, color, icon }) {
+  const baseStyle = "py-3.5 rounded-xl font-bold text-sm transition-all border flex justify-center items-center gap-2 relative overflow-hidden";
+  let colorStyle = "";
+  if (selected) {
+    if (color === 'blue') colorStyle = "bg-blue-50 border-blue-500 text-blue-700 shadow-sm";
+    else if (color === 'green') colorStyle = "bg-green-50 border-green-500 text-green-700 shadow-sm";
+    else if (color === 'red') colorStyle = "bg-red-50 border-red-500 text-red-700 shadow-sm";
+    else colorStyle = "bg-gray-100 border-gray-500 text-gray-700 shadow-sm";
+  } else {
+    colorStyle = "bg-white border-gray-200 text-gray-500 hover:bg-gray-50 hover:border-gray-300";
+  }
+  return (
+    <button onClick={onClick} className={`${baseStyle} ${colorStyle}`}>
+      {icon && React.isValidElement(icon) ? icon : null}
+      {label}
+      {selected && <div className="absolute top-1 right-1"><CheckCircle size={14} className="text-current opacity-50" /></div>}
+    </button>
+  );
+}
+
+// --------------------------------------------------------------------------------------
+// SettingsModal (Complete)
+// --------------------------------------------------------------------------------------
+function SettingsModal({ devices, staffList, transmitterModels, onClose }) {
+  const [activeTab, setActiveTab] = useState('DEVICE');
+  
+  const handleSaveDevice = async (device) => {
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'devices', device.id), device);
+  };
+  const handleDeleteDevice = async (id) => {
+    if(confirm('本当に削除しますか？')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'devices', id));
+  };
+
+  const handleSaveStaff = async (staff) => {
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'staff', staff.id), staff);
+  };
+  const handleDeleteStaff = async (id) => {
+    if(confirm('本当に削除しますか？')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'staff', id));
+  };
+
+  const handleSaveModel = async (model) => {
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', model.id), model);
+  };
+  const handleDeleteModel = async (id) => {
+    if(confirm('本当に削除しますか？')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', id));
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white w-full max-w-2xl h-[80vh] rounded-xl shadow-2xl overflow-hidden flex flex-col">
+        <div className="bg-gray-800 text-white p-4 flex justify-between items-center">
+          <h2 className="text-lg font-bold flex items-center gap-2"><Settings size={20}/> 設定・マスタ管理</h2>
+          <button onClick={onClose}><X size={20}/></button>
+        </div>
+        
+        <div className="flex border-b overflow-x-auto">
+          <button onClick={() => setActiveTab('DEVICE')} className={`flex-1 py-3 px-4 font-bold whitespace-nowrap ${activeTab === 'DEVICE' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}>機器マスタ</button>
+          <button onClick={() => setActiveTab('STAFF')} className={`flex-1 py-3 px-4 font-bold whitespace-nowrap ${activeTab === 'STAFF' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}>担当者マスタ</button>
+          <button onClick={() => setActiveTab('MODEL')} className={`flex-1 py-3 px-4 font-bold whitespace-nowrap ${activeTab === 'MODEL' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}>型番マスタ</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
+          {activeTab === 'DEVICE' ? (
+            <DeviceMasterEditor list={devices} models={transmitterModels} onSave={handleSaveDevice} onDelete={handleDeleteDevice} />
+          ) : activeTab === 'STAFF' ? (
+            <StaffMasterEditor list={staffList} onSave={handleSaveStaff} onDelete={handleDeleteStaff} />
+          ) : (
+            <TransmitterModelEditor list={transmitterModels} onSave={handleSaveModel} onDelete={handleDeleteModel} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// DeviceMasterEditor (With DnD, Monitor Edit, Bulk Add)
+function DeviceMasterEditor({ list, models, onSave, onDelete }) {
+  const [addMode, setAddMode] = useState(null);
+  const [addStep, setAddStep] = useState(1);
+  const [newDeviceBase, setNewDeviceBase] = useState({ ward: '', monitorGroup: '' });
+  const [deviceRows, setDeviceRows] = useState([{id: '', model: ''}]);
+  const [monitorMode, setMonitorMode] = useState('EXISTING');
+  const [newMonitorModel, setNewMonitorModel] = useState('');
+  const [newMonitorSerial, setNewMonitorSerial] = useState('');
+  const [editItem, setEditItem] = useState(null);
+  const [originalId, setOriginalId] = useState('');
+  const [filterText, setFilterText] = useState('');
+  const [editingMonitor, setEditingMonitor] = useState(null);
+  const [draggedItem, setDraggedItem] = useState(null);
+  const [expandedWards, setExpandedWards] = useState({});
+
+  const transmitterModelsList = useMemo(() => models.filter(m => m.type === 'TRANSMITTER'), [models]);
+  const monitorModelsList = useMemo(() => models.filter(m => m.type === 'MONITOR'), [models]);
+
+  useEffect(() => {
+    if (transmitterModelsList.length > 0) {
+      setDeviceRows(prev => prev.map(row => row.model ? row : { ...row, model: transmitterModelsList[0].name }));
+    }
+  }, [transmitterModelsList]);
+
+  const displayList = useMemo(() => {
+    let sorted = [...list].sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
+    if (!filterText) return sorted;
+    return sorted.filter((d) => d.id.includes(filterText) || d.monitorGroup.includes(filterText) || d.ward.includes(filterText));
+  }, [list, filterText]);
+
+  const allWards = useMemo(() => Array.from(new Set(list.map((d) => d.ward))), [list]);
+
+  const getMonitorsByWard = (ward) => {
+    const wardDevices = list.filter((d) => d.ward === ward);
+    return Array.from(new Set(wardDevices.map((d) => d.monitorGroup))).filter(Boolean);
+  };
+
+  const toggleWard = (ward) => setExpandedWards(prev => ({ ...prev, [ward]: !prev[ward] }));
+
+  const startFlow = (mode) => {
+    setNewDeviceBase({ ward: '', monitorGroup: '' });
+    const defaultModel = transmitterModelsList.length > 0 ? transmitterModelsList[0].name : '';
+    setDeviceRows([{id: '', model: defaultModel}]); 
+    setMonitorMode('EXISTING');
+    setNewMonitorModel(monitorModelsList.length > 0 ? monitorModelsList[0].name : '');
+    setNewMonitorSerial('');
+    setAddMode(mode);
+    if (mode === 'WARD') { setAddStep(1); } 
+    else if (mode === 'MONITOR') { setAddStep(1); setMonitorMode('NEW'); } 
+    else if (mode === 'DEVICE') { setAddStep(1); setMonitorMode('EXISTING'); }
+  };
+
+  const handleNextStep = () => {
+    if (addStep === 1 && !newDeviceBase.ward) return alert('病棟を選択または入力してください');
+    if (addStep === 2) {
+      if (monitorMode === 'EXISTING' && !newDeviceBase.monitorGroup) return alert('モニタを選択してください');
+      if (monitorMode === 'NEW') {
+        if (!newMonitorModel || !newMonitorSerial) return alert('モニタ型番と製造番号を入力してください');
+        const groupName = `${newMonitorModel} (${newMonitorSerial})`;
+        setNewDeviceBase(prev => ({ ...prev, monitorGroup: groupName }));
+      }
+    }
+    setAddStep(prev => prev + 1);
+  };
+
+  const addRow = () => {
+    const lastModel = deviceRows[deviceRows.length - 1]?.model || (transmitterModelsList.length > 0 ? transmitterModelsList[0].name : '');
+    setDeviceRows([...deviceRows, {id: '', model: lastModel}]);
+  };
+  
+  const removeRow = (index) => {
+    if (deviceRows.length <= 1) return;
+    setDeviceRows(deviceRows.filter((_, i) => i !== index));
+  };
+
+  const updateRow = (index, field, value) => {
+    const newRows = [...deviceRows];
+    newRows[index][field] = value;
+    setDeviceRows(newRows);
+  };
+
+  const handleCompleteAdd = async () => {
+    const validRows = deviceRows.filter(r => r.id.trim() !== '');
+    if (validRows.length === 0) return alert('chを1つ以上入力してください');
+    let currentMaxSort = list.length > 0 ? Math.max(...list.map((d) => d.sortOrder || 0)) : 0;
+    for (const row of validRows) {
+      currentMaxSort++;
+      const newDevice = { ...newDeviceBase, id: row.id, model: row.model, sortOrder: currentMaxSort };
+      await onSave(newDevice);
+    }
+    alert(`${validRows.length}件の送信機を登録しました`);
+    setAddMode(null);
+  };
+
+  const handleStartEdit = (device) => { setEditItem({ ...device }); setOriginalId(device.id); };
+  const handleUpdate = async () => {
+    if (editItem) {
+      if (editItem.id !== originalId) { await onSave(editItem); await onDelete(originalId); } 
+      else { await onSave(editItem); }
+      setEditItem(null); setOriginalId('');
+    }
+  };
+
+  const handleUpdateMonitorName = async () => {
+    if (!editingMonitor || !editingMonitor.model || !editingMonitor.serial) return;
+    const newName = `${editingMonitor.model} (${editingMonitor.serial})`;
+    if (newName === editingMonitor.oldName) { setEditingMonitor(null); return; }
+    if (!confirm(`「${editingMonitor.oldName}」を「${newName}」に変更します。\n紐付いている全ての送信機データが更新されますがよろしいですか？`)) return;
+    const batch = writeBatch(db);
+    const targets = list.filter((d) => d.monitorGroup === editingMonitor.oldName);
+    targets.forEach((d) => { batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', d.id), { monitorGroup: newName }); });
+    await batch.commit();
+    setEditingMonitor(null);
+  };
+
+  const handleDragStart = (e, item) => { setDraggedItem(item); if ('dataTransfer' in e) e.dataTransfer.effectAllowed = 'move'; };
+  const handleDragOver = (e) => e.preventDefault();
+  const handleDrop = async (e, targetItem) => {
+    e.preventDefault();
+    if (!draggedItem || draggedItem.id === targetItem.id) return;
+    if (draggedItem.monitorGroup !== targetItem.monitorGroup) return;
+    const batch = writeBatch(db);
+    const draggedOrder = draggedItem.sortOrder ?? 0;
+    const targetOrder = targetItem.sortOrder ?? 0;
+    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', draggedItem.id), { sortOrder: targetOrder });
+    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', targetItem.id), { sortOrder: draggedOrder });
+    await batch.commit();
+    setDraggedItem(null);
+  };
+  const touchItemRef = useRef(null);
+  const handleTouchStart = (e, item) => { touchItemRef.current = item; };
+  const handleTouchMove = (e) => {};
+  const handleTouchEnd = async (e) => {
+    const changedTouch = e.changedTouches[0];
+    const elem = document.elementFromPoint(changedTouch.clientX, changedTouch.clientY);
+    const targetRow = elem?.closest('[data-device-id]');
+    if (targetRow && touchItemRef.current) {
+      const targetId = targetRow.getAttribute('data-device-id');
+      if (targetId && targetId !== touchItemRef.current.id) {
+        const targetDevice = list.find((d) => d.id === targetId);
+        if (targetDevice) await handleDrop({ preventDefault: () => {} }, targetDevice);
+      }
+    }
+    touchItemRef.current = null;
+  };
+  
+  const devicesByWardAndMonitor = useMemo(() => {
+    const wardGroups = {};
+    displayList.forEach((d) => {
+      if (!wardGroups[d.ward]) wardGroups[d.ward] = {};
+      if (!wardGroups[d.ward][d.monitorGroup]) wardGroups[d.ward][d.monitorGroup] = [];
+      wardGroups[d.ward][d.monitorGroup].push(d);
+    });
+    return wardGroups;
+  }, [displayList]);
+
+  if (addMode) {
+    return (
+      <div className="bg-white p-6 rounded-lg shadow-lg border border-gray-200">
+        <div className="flex items-center gap-2 mb-4 pb-2 border-b">
+          <h3 className="text-xl font-bold">{addMode === 'WARD' ? '新規病棟の開設' : addMode === 'MONITOR' ? '新規モニタの追加' : '送信機の追加'} <span className="text-sm font-normal text-gray-500 ml-2">(Step {addStep}/3)</span></h3>
+        </div>
+        {addStep === 1 && (
+          <div className="space-y-4 animate-fade-in">
+            <h4 className="font-bold text-gray-700">{addMode === 'WARD' ? '1. 新しい病棟名を入力してください' : '1. 対象の病棟を選択してください'}</h4>
+            {addMode !== 'WARD' && (
+              <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto">
+                {allWards.map(ward => <button key={ward} onClick={() => setNewDeviceBase({...newDeviceBase, ward})} className={`p-3 rounded border text-left ${newDeviceBase.ward === ward ? 'bg-blue-100 border-blue-500 text-blue-800 font-bold' : 'bg-white hover:bg-gray-50'}`}>{ward}</button>)}
+              </div>
+            )}
+            {(addMode === 'WARD') && (
+              <div className="mt-4"><label className="text-xs text-gray-500 block mb-1">病棟名:</label><input className="w-full border p-2 rounded" placeholder="新しい病棟名..." value={newDeviceBase.ward} onChange={e => setNewDeviceBase({...newDeviceBase, ward: e.target.value})} autoFocus/></div>
+            )}
+          </div>
+        )}
+        {addStep === 2 && (
+          <div className="space-y-4 animate-fade-in">
+            <h4 className="font-bold text-gray-700">{addMode === 'MONITOR' ? '2. 新しいモニタ情報を入力してください' : '2. モニタ(親機)を選択してください'}</h4>
+            <p className="text-sm text-gray-500 mb-2">選択中の病棟: {newDeviceBase.ward}</p>
+            {addMode !== 'MONITOR' && (
+              <div className="flex bg-gray-100 p-1 rounded-lg mb-4">
+                <button onClick={() => setMonitorMode('EXISTING')} className={`flex-1 py-2 rounded-md text-sm font-bold transition-all ${monitorMode === 'EXISTING' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}>既存から選択</button>
+                <button onClick={() => setMonitorMode('NEW')} className={`flex-1 py-2 rounded-md text-sm font-bold transition-all ${monitorMode === 'NEW' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}>新規作成</button>
+              </div>
+            )}
+            {monitorMode === 'EXISTING' && addMode !== 'MONITOR' && (
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {getMonitorsByWard(newDeviceBase.ward).map(monitor => (
+                  <button key={monitor} onClick={() => setNewDeviceBase({...newDeviceBase, monitorGroup: monitor})} className={`w-full p-3 rounded border text-left flex items-center gap-2 ${newDeviceBase.monitorGroup === monitor ? 'bg-blue-100 border-blue-500 text-blue-800 font-bold' : 'bg-white hover:bg-gray-50'}`}><Monitor size={16}/> {monitor}</button>
+                ))}
+                {getMonitorsByWard(newDeviceBase.ward).length === 0 && <div className="text-center py-8 text-gray-400 bg-gray-50 rounded border border-dashed">この病棟にはまだモニタがありません。<br/>新規作成してください。</div>}
+              </div>
+            )}
+            {monitorMode === 'NEW' && (
+              <div className="bg-gray-50 p-4 rounded border space-y-4 animate-slide-up">
+                <div className="grid grid-cols-2 gap-4">
+                  <div><label className="block text-xs font-bold text-gray-700 mb-1">モニタ型番</label><select className="w-full border p-2 rounded" value={newMonitorModel} onChange={e => setNewMonitorModel(e.target.value)}><option value="">選択してください</option>{monitorModelsList.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
+                  <div><label className="block text-xs font-bold text-gray-700 mb-1">製造番号</label><input className="w-full border p-2 rounded" placeholder="例: 01677" value={newMonitorSerial} onChange={e => setNewMonitorSerial(e.target.value)}/></div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {addStep === 3 && (
+          <div className="space-y-4 animate-fade-in">
+            <h4 className="font-bold text-gray-700">3. 送信機(ch)を入力して登録完了</h4>
+            <div className="bg-blue-50 p-4 rounded-lg text-sm text-blue-800 mb-4 border border-blue-100"><p className="font-bold mb-1">確認:</p><ul className="list-disc pl-5 space-y-1"><li>病棟: {newDeviceBase.ward}</li><li>モニタ: {newDeviceBase.monitorGroup}</li></ul></div>
+            <div className="space-y-3">
+              <div className="grid grid-cols-12 gap-2 text-xs font-bold text-gray-500 px-1"><div className="col-span-6">ch (管理番号)</div><div className="col-span-5">型番</div><div className="col-span-1"></div></div>
+              {deviceRows.map((row, index) => (
+                <div key={index} className="grid grid-cols-12 gap-2 items-center">
+                  <div className="col-span-6"><input className="w-full border p-2 rounded font-mono" placeholder="例: 1001" value={row.id} onChange={e => updateRow(index, 'id', e.target.value)} autoFocus={index === deviceRows.length - 1}/></div>
+                  <div className="col-span-5"><select className="w-full border p-2 rounded" value={row.model} onChange={e => updateRow(index, 'model', e.target.value)}>{transmitterModelsList.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
+                  <div className="col-span-1 flex justify-center">{deviceRows.length > 1 && <button onClick={() => removeRow(index)} className="text-red-400 hover:text-red-600 p-1"><Trash2 size={18}/></button>}</div>
+                </div>
+              ))}
+              <button onClick={addRow} className="w-full py-2 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-colors flex items-center justify-center gap-2"><Plus size={16}/> 機器を追加</button>
+            </div>
+          </div>
+        )}
+        <div className="flex justify-between mt-8 pt-4 border-t">
+           {addStep > 1 ? <button onClick={() => setAddStep(s => s - 1)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded flex items-center gap-1"><ArrowLeft size={16}/> 戻る</button> : <button onClick={() => setAddMode(null)} className="px-4 py-2 text-gray-500 hover:bg-gray-100 rounded">キャンセル</button>}
+           {addStep < 3 ? <button onClick={handleNextStep} className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1">次へ <ArrowRight size={16}/></button> : <button onClick={handleCompleteAdd} className="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 flex items-center gap-1 font-bold"><Save size={16}/> 登録完了</button>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        <button onClick={() => startFlow('WARD')} className="flex flex-col items-center justify-center p-4 bg-white border-2 border-dashed border-gray-300 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all group"><div className="bg-blue-100 p-3 rounded-full mb-2 group-hover:bg-blue-200 group-hover:scale-110 transition-transform"><MapPin size={24} className="text-blue-600"/></div><span className="text-sm font-bold text-gray-700">病棟を追加</span></button>
+        <button onClick={() => startFlow('MONITOR')} className="flex flex-col items-center justify-center p-4 bg-white border-2 border-dashed border-gray-300 rounded-xl hover:border-green-500 hover:bg-green-50 transition-all group"><div className="bg-green-100 p-3 rounded-full mb-2 group-hover:bg-green-200 group-hover:scale-110 transition-transform"><Monitor size={24} className="text-green-600"/></div><span className="text-sm font-bold text-gray-700">モニタを追加</span></button>
+        <button onClick={() => startFlow('DEVICE')} className="flex flex-col items-center justify-center p-4 bg-white border-2 border-dashed border-gray-300 rounded-xl hover:border-orange-500 hover:bg-orange-50 transition-all group"><div className="bg-orange-100 p-3 rounded-full mb-2 group-hover:bg-orange-200 group-hover:scale-110 transition-transform"><Activity size={24} className="text-orange-600"/></div><span className="text-sm font-bold text-gray-700">送信機を追加</span></button>
+      </div>
+      <div className="relative">
+        <Search className="absolute left-3 top-2.5 text-gray-400" size={18} />
+        <input type="text" placeholder="機器マスタ内検索..." value={filterText} onChange={(e) => setFilterText(e.target.value)} className="w-full pl-10 pr-4 py-2 bg-white border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-300 text-sm" />
+        {filterText && <button onClick={() => setFilterText('')} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"><X size={18}/></button>}
+      </div>
+
+      {editItem && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
+          <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md border">
+            <h3 className="font-bold mb-4">機器情報の編集</h3>
+            <div className="space-y-3">
+               <div><label className="text-xs text-gray-500">ch</label><input className="w-full border p-2 rounded bg-white" value={editItem.id} onChange={e => setEditItem({...editItem, id: e.target.value})}/></div>
+               <div><label className="text-xs text-gray-500">病棟</label><input className="w-full border p-2 rounded bg-gray-100 text-gray-500" value={editItem.ward} disabled/></div>
+               <div><label className="text-xs text-gray-500">モニタ</label><input className="w-full border p-2 rounded bg-gray-100 text-gray-500" value={editItem.monitorGroup} disabled/></div>
+               <div><label className="text-xs text-gray-500">型番</label><select className="w-full border p-2 rounded" value={editItem.model} onChange={e => setEditItem({...editItem, model: e.target.value})}>{transmitterModelsList.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+               <button onClick={() => setEditItem(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
+               <button onClick={handleUpdate} className="px-4 py-2 bg-blue-600 text-white rounded font-bold">更新</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingMonitor && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
+          <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md border">
+            <h3 className="font-bold mb-4 flex items-center gap-2"><Edit2 size={20}/> モニタ情報の編集</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="block text-xs font-bold text-gray-700 mb-1">モニタ型番</label><select className="w-full border p-2 rounded" value={editingMonitor.model} onChange={e => setEditingMonitor({...editingMonitor, model: e.target.value})}>{monitorModelsList.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
+              <div><label className="block text-xs font-bold text-gray-700 mb-1">製造番号</label><input className="w-full border p-2 rounded" value={editingMonitor.serial} onChange={e => setEditingMonitor({...editingMonitor, serial: e.target.value})}/></div>
+            </div>
+            <div className="mt-4 text-center"><div className="text-xs text-gray-400 mb-1">更新後の名前</div><div className="font-mono bg-gray-100 border px-3 py-1 rounded inline-block">{editingMonitor.model} ({editingMonitor.serial})</div></div>
+            <div className="flex justify-end gap-2 mt-6">
+               <button onClick={() => setEditingMonitor(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
+               <button onClick={handleUpdateMonitorName} className="px-4 py-2 bg-blue-600 text-white rounded font-bold">一括更新</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {Object.entries(devicesByWardAndMonitor).map(([ward, monitorGroups]) => (
+          <div key={ward} className="border rounded-lg bg-white overflow-hidden shadow-sm">
+            <button onClick={() => toggleWard(ward)} className="w-full p-3 bg-gray-50 flex justify-between items-center hover:bg-gray-100 transition-colors">
+              <div className="flex items-center gap-2"><MapPin size={18} className="text-blue-500"/><span className="font-bold text-gray-800">{ward}</span></div>
+              {expandedWards[ward] ? <ChevronUp size={20} className="text-gray-400"/> : <ChevronDown size={20} className="text-gray-400"/>}
+            </button>
+            
+            {expandedWards[ward] && (
+              <div className="p-3 bg-white space-y-4 animate-slide-up">
+                {Object.entries(monitorGroups).map(([monitorName, monitorDevices]) => (
+                  <div key={monitorName} className="border rounded-md overflow-hidden">
+                    <div className="bg-gray-100 px-3 py-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-sm font-bold text-gray-700"><Monitor size={14} className="text-green-600"/>{monitorName}</div>
+                      <button onClick={() => { const match = monitorName.match(/^(.+)\s\((.+)\)$/); setEditingMonitor({ oldName: monitorName, model: match ? match[1] : monitorName, serial: match ? match[2] : '' }); }} className="text-xs flex items-center gap-1 bg-white border px-2 py-1 rounded hover:bg-blue-50 text-blue-600 transition-colors"><Edit2 size={12}/> 編集</button>
+                    </div>
+                    <div className="divide-y divide-gray-100 relative">
+                      {monitorDevices.map(d => (
+                        <div key={d.id} data-device-id={d.id} className="p-2 flex justify-between items-center bg-white">
+                          <div className="flex items-center gap-2">
+                            <div className="p-2 cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 touch-none" draggable="true" onDragStart={(e) => handleDragStart(e, d)} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, d)} onTouchStart={(e) => handleTouchStart(e, d)} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}><Menu size={16}/></div>
+                            <span className="font-bold font-mono text-gray-800 w-16 text-right">ch:{d.id}</span>
+                            <span className="text-xs text-gray-400">({d.model})</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => handleStartEdit(d)} className="p-1.5 text-blue-500 hover:bg-blue-50 rounded transition-colors"><Edit2 size={16}/></button>
+                            <button onClick={() => onDelete(d.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"><Trash2 size={16}/></button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// StaffMasterEditor
+function StaffMasterEditor({ list, onSave, onDelete }) {
+  const [formData, setFormData] = useState({ id: '', name: '' });
+  const [editItem, setEditItem] = useState(null);
+
+  useEffect(() => {
+    if (editItem) setFormData(editItem);
+    else setFormData({ id: crypto.randomUUID(), name: '' });
+  }, [editItem]);
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white p-4 rounded shadow space-y-3">
+        <h3 className="font-bold text-gray-700">{editItem ? 'スタッフ編集' : '新規追加'}</h3>
+        <div className="flex gap-2">
+          <input className="border p-2 rounded flex-1" placeholder="氏名" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+          {editItem && <button onClick={() => setEditItem(null)} className="px-3 py-1 bg-gray-300 rounded">キャンセル</button>}
+          <button disabled={!formData.name} onClick={() => { onSave(formData); setFormData({id: crypto.randomUUID(), name:''}); setEditItem(null); }} className="px-3 py-1 bg-blue-600 text-white rounded flex items-center gap-1"><Save size={16}/> 保存</button>
+        </div>
+      </div>
+      <div className="space-y-2">
+        {list.map(s => (
+          <div key={s.id} className="bg-white p-3 rounded shadow flex justify-between items-center">
+            <span className="font-bold">{s.name}</span>
+            <div className="flex gap-2">
+              <button onClick={() => setEditItem(s)} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={18}/></button>
+              <button onClick={() => onDelete(s.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={18}/></button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// TransmitterModelEditor
+function TransmitterModelEditor({ list, onSave, onDelete }) {
+  const [formData, setFormData] = useState({ id: '', name: '', type: 'TRANSMITTER' });
+  const [editItem, setEditItem] = useState(null);
+
+  useEffect(() => {
+    if (editItem) setFormData(editItem);
+    else setFormData({ id: '', name: '', type: 'TRANSMITTER' });
+  }, [editItem]);
+
+  const handleSubmit = async () => {
+    const itemToSave = editItem ? formData : { ...formData, id: formData.name }; 
+    await onSave(itemToSave);
+    setFormData({ id: '', name: '', type: 'TRANSMITTER' });
+    setEditItem(null);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white p-4 rounded shadow space-y-3">
+        <h3 className="font-bold text-gray-700">{editItem ? '型番編集' : '新規追加'}</h3>
+        <div className="flex gap-2 mb-2">
+          <label className="flex items-center gap-2 cursor-pointer"><input type="radio" name="type" checked={formData.type === 'TRANSMITTER'} onChange={() => setFormData({...formData, type: 'TRANSMITTER'})} /> <span className="text-sm">送信機 (ZS-***)</span></label>
+          <label className="flex items-center gap-2 cursor-pointer ml-4"><input type="radio" name="type" checked={formData.type === 'MONITOR'} onChange={() => setFormData({...formData, type: 'MONITOR'})} /> <span className="text-sm">モニタ (WEP-***)</span></label>
+        </div>
+        <div className="flex gap-2">
+          <input className="border p-2 rounded flex-1" placeholder="型番名" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+          {editItem && <button onClick={() => setEditItem(null)} className="px-3 py-1 bg-gray-300 rounded">キャンセル</button>}
+          <button disabled={!formData.name} onClick={handleSubmit} className="px-3 py-1 bg-blue-600 text-white rounded flex items-center gap-1"><Save size={16}/> 保存</button>
+        </div>
+      </div>
+      <div className="space-y-2">
+        {list.map(m => (
+          <div key={m.id} className="bg-white p-3 rounded shadow flex justify-between items-center">
+            <div><span className={`text-xs px-2 py-0.5 rounded mr-2 ${m.type === 'TRANSMITTER' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800'}`}>{m.type === 'TRANSMITTER' ? '送信機' : 'モニタ'}</span><span className="font-bold">{m.name}</span></div>
+            <div className="flex gap-2">
+              <button onClick={() => setEditItem(m)} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={18}/></button>
+              <button onClick={() => onDelete(m.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={18}/></button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// 5. HistoryModal (Full Dashboard)
+function HistoryModal({ db, appId, onClose, onDownloadCSV }) {
+  const [historyRecords, setHistoryRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filterMode, setFilterMode] = useState('ALL');
+
+  useEffect(() => {
+    const fetchHistory = async () => {
+      const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'));
+      const snapshot = await getDocs(q);
+      const list = snapshot.docs.map(d => d.data());
+      list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      setHistoryRecords(list);
+      setLoading(false);
+    };
+    fetchHistory();
+  }, [db, appId]);
+
+  const filteredRecords = useMemo(() => {
+    return historyRecords.filter(r => {
+      if (filterMode === 'ISSUES') return r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG';
+      return true;
+    });
+  }, [historyRecords, filterMode]);
+
+  const stats = useMemo(() => {
+    const total = historyRecords.length;
+    if (total === 0) return null;
+    const inUseCount = historyRecords.filter(r => r.inUse === 'YES').length;
+    const issueCount = historyRecords.filter(r => r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG').length;
+    return { total, utilization: Math.round((inUseCount / total) * 100), issueRate: Math.round((issueCount / total) * 100), issueCount };
+  }, [historyRecords]);
+
+  const groupedHistory = useMemo(() => {
+    const groups = {};
+    filteredRecords.forEach(r => {
+      if (!groups[r.date]) groups[r.date] = [];
+      groups[r.date].push(r);
+    });
+    return groups;
+  }, [filteredRecords]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white w-full max-w-4xl h-[90vh] rounded-xl shadow-2xl overflow-hidden flex flex-col">
+        <div className="bg-gray-800 text-white p-4 flex justify-between items-center">
+          <h2 className="text-lg font-bold flex items-center gap-2"><BarChart2 size={20}/> 履歴・分析ダッシュボード</h2>
+          <button onClick={onClose}><X size={20}/></button>
+        </div>
+        <div className="p-4 border-b bg-gray-50 flex flex-wrap gap-4 items-center justify-between">
+          <div className="flex bg-white rounded-lg border p-1 shadow-sm">
+            <button onClick={() => setFilterMode('ALL')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${filterMode === 'ALL' ? 'bg-blue-100 text-blue-800' : 'text-gray-500 hover:bg-gray-100'}`}>全て表示</button>
+            <button onClick={() => setFilterMode('ISSUES')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-1 ${filterMode === 'ISSUES' ? 'bg-red-100 text-red-800' : 'text-gray-500 hover:bg-gray-100'}`}><AlertTriangle size={14}/> 不具合/故障のみ</button>
+          </div>
+          {stats && (
+            <div className="flex gap-4 text-sm">
+              <div className="bg-blue-50 px-3 py-1 rounded border border-blue-200"><span className="text-gray-500 text-xs block">稼働率</span><span className="font-bold text-lg text-blue-700">{stats.utilization}%</span></div>
+              <div className="bg-red-50 px-3 py-1 rounded border border-red-200"><span className="text-gray-500 text-xs block">不具合件数</span><span className="font-bold text-lg text-red-700">{stats.issueCount}件</span></div>
+            </div>
+          )}
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 bg-gray-100">
+          {loading ? <div className="text-center p-10 text-gray-500">データを読み込んでいます...</div> : (
+            <div className="space-y-6">
+              {Object.keys(groupedHistory).length === 0 && <div className="text-center p-10 text-gray-400">該当するデータがありません</div>}
+              {Object.entries(groupedHistory).map(([date, records]) => (
+                <div key={date} className="bg-white rounded-lg shadow border border-gray-200 overflow-hidden">
+                  <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 flex justify-between items-center">
+                    <div className="flex items-center gap-2 font-bold text-gray-700"><Calendar size={16}/> {date}</div>
+                    <button onClick={() => onDownloadCSV(records, date)} className="text-xs flex items-center gap-1 text-green-600 hover:bg-green-50 px-2 py-1 rounded transition-colors"><Download size={12}/> この日をCSV出力</button>
+                  </div>
+                  <div className="divide-y divide-gray-100">
+                    {records.map((r, i) => {
+                      const isIssue = r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG';
+                      return (
+                        <div key={i} className={`p-3 text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-gray-50 ${isIssue ? 'bg-red-50/50' : ''}`}>
+                          <div className="flex items-center gap-3">
+                            <span className="text-gray-400 text-xs font-mono">{r.timestamp.split(' ')[1]}</span>
+                            <span className="font-bold w-16">{r.deviceId}</span>
+                            <span className="text-xs bg-gray-200 px-2 py-0.5 rounded text-gray-600">{r.ward}</span>
+                            <span className="text-xs text-gray-500 hidden sm:inline">{r.monitorGroup}</span>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            {r.inUse === 'YES' ? <span className="text-blue-600 text-xs bg-blue-50 px-2 py-0.5 rounded border border-blue-100">使用中</span> : <span className="text-gray-400 text-xs">未使用</span>}
+                            {r.reception === 'BAD' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertTriangle size={12}/> 受信不良 ({r.receptionReason})</span>}
+                            {r.isBroken === 'YES' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertOctagon size={12}/> 破損あり</span>}
+                            {r.channelCheck === 'NG' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertTriangle size={12}/> ch不一致</span>}
+                            {!isIssue && r.inUse === 'YES' && <span className="text-green-600 text-xs flex items-center gap-1"><CheckCircle size={12}/> 良好</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
