@@ -124,10 +124,12 @@ function App() {
   useEffect(() => {
     const init = async () => {
       try {
+        // 環境トークンチェック（custom-token-mismatch回避のため削除）
+        // 個別のFirebase Configを使用しているため、匿名認証を直接実行します
         await signInAnonymously(auth);
       } catch (e) {
         console.error("Auth Error", e);
-        alert("認証エラー: Firebase設定を確認してください");
+        // alert("認証エラー: Firebase設定を確認してください");
       }
     };
     init();
@@ -148,7 +150,7 @@ function App() {
         list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999) || a.id.localeCompare(b.id));
         setDevices(list);
       }
-    });
+    }, (error) => console.error("Device sync error", error));
 
     // 2. Staff
     const unsubStaff = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'staff'), (snapshot) => {
@@ -158,7 +160,7 @@ function App() {
       } else {
         setStaffList(snapshot.docs.map(d => d.data()));
       }
-    });
+    }, (error) => console.error("Staff sync error", error));
 
     // 3. Models
     const unsubModels = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'transmitter_models'), (snapshot) => {
@@ -168,7 +170,7 @@ function App() {
       } else {
         setTransmitterModels(snapshot.docs.map(d => d.data()));
       }
-    });
+    }, (error) => console.error("Models sync error", error));
 
     // 4. Checks
     const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'), where('date', '==', today));
@@ -176,7 +178,7 @@ function App() {
       const recs = {};
       snapshot.docs.forEach(d => { recs[d.data().deviceId] = d.data(); });
       setRecords(recs);
-    });
+    }, (error) => console.error("Checks sync error", error));
 
     return () => { unsubDevices(); unsubStaff(); unsubModels(); unsubChecks(); };
   }, [user]);
@@ -253,7 +255,7 @@ function App() {
 
   const executeSave = () => {
     setShowConfirmSave(false);
-    alert('本日の点検記録を完了しました。\n(データは履歴に自動保存されています)');
+    // alert('本日の点検記録を完了しました。\n(データは履歴に自動保存されています)');
   };
 
   if (!user) return <div className="flex h-screen items-center justify-center">Loading...</div>;
@@ -364,7 +366,7 @@ function App() {
           onClose={() => setSelectedDevice(null)}
           onSave={async (record) => {
             const docId = `${record.date}_${record.deviceId}`;
-            const recordWithSnapshot = { ...record, model: selectedDevice.model, monitorGroup: selectedDevice.monitorGroup, ward: selectedDevice.ward };
+            constybRecordWithSnapshot = { ...record, model: selectedDevice.model, monitorGroup: selectedDevice.monitorGroup, ward: selectedDevice.ward };
             await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId), recordWithSnapshot);
             setSelectedDevice(null);
           }}
