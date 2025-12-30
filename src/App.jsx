@@ -4,7 +4,7 @@ import {
   Activity, Filter, MapPin, Monitor, Settings, User, Plus, Trash2, Edit2, 
   History, LogOut, FileText, ChevronDown, ChevronUp, ArrowRight, ArrowLeft,
   Server, Grid, Layers, Menu, BarChart2, Calendar, AlertOctagon, HelpCircle,
-  Cloud
+  Cloud, Clock
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -119,17 +119,23 @@ function App() {
   const [showConfirmSave, setShowConfirmSave] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   
+  // 時計用のstate
+  const [currentTime, setCurrentTime] = useState(new Date());
+
   const today = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
+
+  // 時計の更新
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const init = async () => {
       try {
-        // 環境トークンチェック（custom-token-mismatch回避のため削除）
-        // 個別のFirebase Configを使用しているため、匿名認証を直接実行します
         await signInAnonymously(auth);
       } catch (e) {
         console.error("Auth Error", e);
-        // alert("認証エラー: Firebase設定を確認してください");
       }
     };
     init();
@@ -255,7 +261,6 @@ function App() {
 
   const executeSave = () => {
     setShowConfirmSave(false);
-    // alert('本日の点検記録を完了しました。\n(データは履歴に自動保存されています)');
   };
 
   if (!user) return <div className="flex h-screen items-center justify-center">Loading...</div>;
@@ -266,7 +271,8 @@ function App() {
       <header className="bg-blue-600 text-white p-3 shadow-md sticky top-0 z-10">
         <div className="max-w-3xl mx-auto w-full flex flex-col gap-2">
           <div className="flex justify-between items-center">
-            <h1 className="text-lg font-bold flex items-center gap-2"><Activity size={20} /> 送信機チェック</h1>
+            {/* タイトル変更: 送信機チェック -> 送信機ラウンド */}
+            <h1 className="text-lg font-bold flex items-center gap-2"><Activity size={20} /> 送信機ラウンド</h1>
             <div className="flex gap-2">
               <button onClick={() => setShowHistory(true)} className="p-2 hover:bg-blue-500 rounded-full transition-colors flex items-center gap-1" title="履歴・分析">
                 <BarChart2 size={20} /><span className="text-xs font-bold hidden sm:inline">履歴</span>
@@ -274,12 +280,20 @@ function App() {
               <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-blue-500 rounded-full transition-colors" title="設定"><Settings size={20} /></button>
             </div>
           </div>
-          <div className="flex items-center gap-2 bg-blue-700 p-2 rounded-lg text-sm">
-            <User size={16} className="text-blue-200" /><span className="whitespace-nowrap">点検者:</span>
-            <select value={currentStaff} onChange={(e) => setCurrentStaff(e.target.value)} className="bg-blue-600 border border-blue-400 text-white rounded px-2 py-1 text-sm flex-1 focus:outline-none focus:ring-1 focus:ring-white">
-              <option value="">未選択</option>
-              {staffList.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-            </select>
+          
+          <div className="flex gap-2">
+            <div className="flex items-center gap-2 bg-blue-700 p-2 rounded-lg text-sm flex-1">
+              <User size={16} className="text-blue-200" /><span className="whitespace-nowrap">点検者:</span>
+              <select value={currentStaff} onChange={(e) => setCurrentStaff(e.target.value)} className="bg-blue-600 border border-blue-400 text-white rounded px-2 py-1 text-sm flex-1 focus:outline-none focus:ring-1 focus:ring-white">
+                <option value="">未選択</option>
+                {staffList.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+              </select>
+            </div>
+            {/* 日付・時計表示エリア */}
+            <div className="bg-blue-800/50 p-2 rounded-lg text-xs font-mono text-blue-100 flex flex-col justify-center items-end leading-tight min-w-[120px]">
+              <div>{currentTime.toLocaleDateString('ja-JP')}</div>
+              <div className="text-sm font-bold">{currentTime.toLocaleTimeString('ja-JP')}</div>
+            </div>
           </div>
         </div>
       </header>
@@ -370,6 +384,13 @@ function App() {
             await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId), recordWithSnapshot);
             setSelectedDevice(null);
           }}
+          onDelete={async (record) => {
+            if(confirm('この点検記録を取り消しますか？\nデータは削除され「未実施」に戻ります。')) {
+              const docId = `${record.date}_${record.deviceId}`;
+              await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId));
+              setSelectedDevice(null);
+            }
+          }}
         />
       )}
 
@@ -426,7 +447,7 @@ function DeviceRow({ device, record, onClick }) {
   );
 }
 
-function CheckModal({ device, initialData, checker, onClose, onSave }) {
+function CheckModal({ device, initialData, checker, onClose, onSave, onDelete }) {
   const [inUse, setInUse] = useState(initialData?.inUse || null);
   const [reception, setReception] = useState(initialData?.reception || 'GOOD');
   const [receptionReason, setReceptionReason] = useState(initialData?.receptionReason || 'A');
@@ -523,8 +544,13 @@ function CheckModal({ device, initialData, checker, onClose, onSave }) {
             <textarea className="w-full p-3 border rounded-lg text-sm focus:ring-2 focus:ring-blue-300 focus:border-blue-300 focus:outline-none transition-shadow bg-gray-50" rows={2} placeholder="特記事項があれば入力してください..." value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
         </div>
-        <div className="p-4 border-t bg-gray-50 shrink-0 safe-area-bottom">
-          <button onClick={handleSave} disabled={isSelectionRequired} className={`w-full text-white font-bold py-3.5 rounded-xl shadow-md transition-all flex justify-center items-center gap-2 ${isSelectionRequired ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 hover:shadow-lg active:scale-[0.98]'}`}>
+        <div className="p-4 border-t bg-gray-50 shrink-0 safe-area-bottom flex gap-3">
+          {initialData && (
+            <button onClick={() => onDelete(initialData)} className="flex-[0.5] bg-red-50 text-red-600 font-bold py-3.5 rounded-xl border border-red-200 shadow-sm hover:bg-red-100 transition-all flex justify-center items-center gap-1 active:scale-95 text-xs sm:text-sm">
+              <Trash2 size={18} /> <span className="hidden sm:inline">記録取消</span><span className="sm:hidden">取消</span>
+            </button>
+          )}
+          <button onClick={handleSave} disabled={isSelectionRequired} className={`flex-1 text-white font-bold py-3.5 rounded-xl shadow-md transition-all flex justify-center items-center gap-2 ${isSelectionRequired ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 hover:shadow-lg active:scale-[0.98]'}`}>
             <Save size={20} /> 点検結果を保存
           </button>
         </div>
