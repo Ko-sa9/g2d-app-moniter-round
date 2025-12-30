@@ -380,7 +380,7 @@ function App() {
           onClose={() => setSelectedDevice(null)}
           onSave={async (record) => {
             const docId = `${record.date}_${record.deviceId}`;
-            constybRecordWithSnapshot = { ...record, model: selectedDevice.model, monitorGroup: selectedDevice.monitorGroup, ward: selectedDevice.ward };
+            const recordWithSnapshot = { ...record, model: selectedDevice.model, monitorGroup: selectedDevice.monitorGroup, ward: selectedDevice.ward };
             await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId), recordWithSnapshot);
             setSelectedDevice(null);
           }}
