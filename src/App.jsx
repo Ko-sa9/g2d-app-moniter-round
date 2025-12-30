@@ -409,7 +409,7 @@ function App() {
       )}
 
       {showSettings && <SettingsModal devices={devices} staffList={staffList} transmitterModels={transmitterModels} onClose={() => setShowSettings(false)} />}
-      {showHistory && <HistoryModal onClose={() => setShowHistory(false)} onDownloadCSV={handleDownloadCSV} />}
+      {showHistory && <HistoryModal db={db} appId={appId} onClose={() => setShowHistory(false)} onDownloadCSV={handleDownloadCSV} />}
     </div>
   );
 }
