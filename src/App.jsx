@@ -32,77 +32,6 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = 'checklist-app-v1';
 
-// --- 初期データ ---
-const INITIAL_MODELS = [
-  { id: 'ZS-630P', name: 'ZS-630P', type: 'TRANSMITTER' },
-  { id: 'WEP-1400', name: 'WEP-1400', type: 'MONITOR' },
-  { id: 'WEP-4204', name: 'WEP-4204', type: 'MONITOR' },
-  { id: 'WEP-5204', name: 'WEP-5204', type: 'MONITOR' },
-];
-
-const INITIAL_DEVICES = [
-  // 3A病棟
-  { id: '1001', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
-  { id: '1004', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
-  { id: '1015', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
-  { id: '1021', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
-  { id: '1042', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
-  { id: '1049', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
-  { id: '1054', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
-  { id: '1072', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (01677)' },
-  { id: '1009', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00503)' },
-  { id: '1027', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00503)' },
-  { id: '1032', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00503)' },
-  { id: '1039', ward: '3A病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00503)' },
-  // 4F病棟
-  { id: '2108', ward: '4F病棟', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00310)' },
-  // 君津1FHD
-  { id: '2023', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (02281)' },
-  { id: '2054', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (02281)' },
-  { id: '2112', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (02281)' },
-  { id: '6029', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (02281)' },
-  { id: '5009', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (03928)' },
-  { id: '5032', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (03928)' },
-  { id: '5060', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (03928)' },
-  { id: '5077', ward: '君津1FHD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (03928)' },
-  // 坂田HD
-  { id: '2035', ward: '坂田HD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00121)' },
-  { id: '2049', ward: '坂田HD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00121)' },
-  { id: '6067', ward: '坂田HD', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00121)' },
-  // 2F病棟
-  { id: '5008', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (05397)' },
-  { id: '5026', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (05397)' },
-  { id: '5031', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (05397)' },
-  { id: '5038', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (05397)' },
-  { id: '4025', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (03486)' },
-  { id: '4030', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (03486)' },
-  { id: '4037', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (03486)' },
-  { id: '4058', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-5204 (03486)' },
-  { id: '1007', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
-  { id: '1025', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
-  { id: '1030', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
-  { id: '1037', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
-  { id: '1058', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
-  { id: '1062', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
-  { id: '1075', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
-  { id: '1078', ward: '2F病棟', model: 'ZS-630P', monitorGroup: 'WEP-1400 (00013)' },
-  // 3F透析室
-  { id: '3001', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00770)' },
-  { id: '3010', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00770)' },
-  { id: '3035', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-4204 (00770)' },
-  { id: '4005', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-4204 (006745)' },
-  { id: '6034', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-4204 (006745)' },
-  { id: '6017', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-5204 (01294)' },
-  { id: '6019', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-5204 (01294)' },
-  { id: '6047', ward: '3F透析室', model: 'ZS-630P', monitorGroup: 'WEP-5204 (01294)' },
-].map((d, i) => ({ ...d, sortOrder: i }));
-
-const INITIAL_STAFF = [
-  { id: '1', name: '管理者' },
-  { id: '2', name: 'スタッフA' },
-  { id: '3', name: 'スタッフB' },
-];
-
 function App() {
   const [user, setUser] = useState(null);
   const [currentStaff, setCurrentStaff] = useState('');
@@ -142,43 +71,28 @@ function App() {
     return onAuthStateChanged(auth, setUser);
   }, []);
 
-  // Data Sync
+// Data Sync
   useEffect(() => {
     if (!user) return;
     
-    // 1. Devices
+    // 1. Devices (初期化ロジックを削除)
     const unsubDevices = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'devices'), (snapshot) => {
-      if (snapshot.empty) {
-        INITIAL_DEVICES.forEach(d => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'devices', d.id), d));
-        setDevices(INITIAL_DEVICES);
-      } else {
-        const list = snapshot.docs.map(d => d.data());
-        list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999) || a.id.localeCompare(b.id));
-        setDevices(list);
-      }
+      const list = snapshot.docs.map(d => d.data());
+      list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999) || a.id.localeCompare(b.id));
+      setDevices(list);
     }, (error) => console.error("Device sync error", error));
 
-    // 2. Staff
+    // 2. Staff (初期化ロジックを削除)
     const unsubStaff = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'staff'), (snapshot) => {
-      if (snapshot.empty) {
-        INITIAL_STAFF.forEach(s => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'staff', s.id), s));
-        setStaffList(INITIAL_STAFF);
-      } else {
-        setStaffList(snapshot.docs.map(d => d.data()));
-      }
+      setStaffList(snapshot.docs.map(d => d.data()));
     }, (error) => console.error("Staff sync error", error));
 
-    // 3. Models
+    // 3. Models (初期化ロジックを削除)
     const unsubModels = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'transmitter_models'), (snapshot) => {
-      if (snapshot.empty) {
-        INITIAL_MODELS.forEach(m => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', m.id), m));
-        setTransmitterModels(INITIAL_MODELS);
-      } else {
-        setTransmitterModels(snapshot.docs.map(d => d.data()));
-      }
+      setTransmitterModels(snapshot.docs.map(d => d.data()));
     }, (error) => console.error("Models sync error", error));
 
-    // 4. Checks
+    // 4. Checks (変更なし)
     const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'), where('date', '==', today));
     const unsubChecks = onSnapshot(q, (snapshot) => {
       const recs = {};
@@ -188,7 +102,7 @@ function App() {
 
     return () => { unsubDevices(); unsubStaff(); unsubModels(); unsubChecks(); };
   }, [user]);
-
+  
   // --- Helpers ---
   const wards = useMemo(() => {
     const list = Array.from(new Set(devices.map(d => d.ward)));
