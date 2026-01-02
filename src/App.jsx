@@ -644,7 +644,7 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
         
         {/* 次へ (メイン) */}
         {/* 修正: col-span-2 -> col-span-1 に変更して幅を均等化、disabled制御を変更 */}
-        <button onClick={handleSaveAndNext} disabled={isLast} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all shadow-sm ${isLast ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : (isSelectionRequired ? 'bg-blue-300 text-white' : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95')}`}>
+        <button onClick={handleSaveAndNext} disabled={isLast} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all shadow-sm ${isLast ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95'}`}>
             <ArrowRight size={24}/>
         </button>
       </div>
