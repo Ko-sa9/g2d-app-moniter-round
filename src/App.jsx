@@ -600,7 +600,8 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
       </div>
 
       {/* ボタン配置の変更: 左から「戻る」「取消」「次へ」 */}
-      <div className="pt-2 grid grid-cols-4 gap-3">
+      {/* 修正: grid-cols-4 -> grid-cols-3 に変更し、ボタン幅を均等化 */}
+      <div className="pt-2 grid grid-cols-3 gap-3">
         {/* 戻る */}
         <button onClick={handleSaveAndPrev} disabled={isSelectionRequired} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all ${isSelectionRequired ? 'bg-gray-100 text-gray-300' : 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-95'}`}>
             <ArrowLeft size={24}/>
@@ -609,7 +610,8 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
         {/* 取消 */}
         <div className="col-span-1">
              {initialData ? (
-                <button onClick={() => onDelete(initialData)} className="w-full h-full bg-red-50 text-red-500 rounded-xl flex justify-center items-center hover:bg-red-100 active:scale-95 transition-all">
+                /* 修正: h-full -> py-4 に変更して高さを他ボタンと厳密に合わせる */
+                <button onClick={() => onDelete(initialData)} className="w-full py-4 bg-red-50 text-red-500 rounded-xl flex justify-center items-center hover:bg-red-100 active:scale-95 transition-all">
                     <Trash2 size={24} />
                 </button>
             ) : (
@@ -618,7 +620,8 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
         </div>
         
         {/* 次へ (メイン) */}
-        <button onClick={handleSaveAndNext} disabled={isSelectionRequired} className={`col-span-2 py-4 rounded-xl flex justify-center items-center transition-all shadow-sm ${isSelectionRequired ? 'bg-gray-200 text-gray-400' : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95'}`}>
+        {/* 修正: col-span-2 -> col-span-1 に変更して幅を均等化 */}
+        <button onClick={handleSaveAndNext} disabled={isSelectionRequired} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all shadow-sm ${isSelectionRequired ? 'bg-gray-200 text-gray-400' : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95'}`}>
             <ArrowRight size={24}/>
         </button>
       </div>
