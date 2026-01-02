@@ -256,7 +256,7 @@ function App() {
     if(confirm('この点検記録を取り消しますか？\nデータは削除され「未実施」に戻ります。')) {
       const docId = `${record.date}_${record.deviceId}`;
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId));
-      setSelectedDevice(null); // 削除後は閉じる
+      // setSelectedDevice(null); // 削除後は閉じる -> 削除
     }
   };
 
@@ -505,6 +505,17 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
   const [isBroken, setIsBroken] = useState(initialData?.isBroken || '-');
   const [channelCheck, setChannelCheck] = useState(initialData?.channelCheck || '-');
   const [note, setNote] = useState(initialData?.note || '');
+
+  // 追加: 外部からのデータ変更(削除含む)をフォームに反映させる
+  useEffect(() => {
+    setInUse(initialData?.inUse || null);
+    setReception(initialData?.reception || 'GOOD');
+    setReceptionReason(initialData?.receptionReason || 'A');
+    setReceptionNote(initialData?.receptionNote || '');
+    setIsBroken(initialData?.isBroken || '-');
+    setChannelCheck(initialData?.channelCheck || '-');
+    setNote(initialData?.note || '');
+  }, [initialData]);
 
   useEffect(() => {
     if (inUse === 'YES') {
