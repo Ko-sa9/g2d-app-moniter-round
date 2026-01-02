@@ -86,14 +86,18 @@ function App() {
       setDevices(list);
     }, (error) => console.error("Device sync error", error));
 
-    // 2. Staff
+    // 2. Staff (Updated sort)
     const unsubStaff = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'staff'), (snapshot) => {
-      setStaffList(snapshot.docs.map(d => d.data()));
+      const list = snapshot.docs.map(d => d.data());
+      list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
+      setStaffList(list);
     }, (error) => console.error("Staff sync error", error));
 
-    // 3. Models
+    // 3. Models (Updated sort)
     const unsubModels = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'transmitter_models'), (snapshot) => {
-      setTransmitterModels(snapshot.docs.map(d => d.data()));
+      const list = snapshot.docs.map(d => d.data());
+      list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
+      setTransmitterModels(list);
     }, (error) => console.error("Models sync error", error));
 
     // 4. Wards (病棟マスタ・順序)
@@ -160,6 +164,41 @@ function App() {
     const checkedCount = Object.keys(records).length;
     return Math.round((checkedCount / devices.length) * 100);
   }, [devices, records]);
+
+  // CSV出力
+  const handleDownloadCSV = (targetRecords, fileNameDate) => {
+    const list = Array.isArray(targetRecords) ? targetRecords : Object.values(targetRecords);
+    const header = ['点検日', '時間', '病棟', '点検者', 'モニタ', 'ch', '送信機型番', '①使用中', '②受信状態', '不良理由', '備考', '③破損', '④ch確認'];
+    const rows = list.map(r => {
+      const deviceMaster = devices.find(d => d.id === r.deviceId);
+      const model = r.model || deviceMaster?.model || '';
+      const monitor = r.monitorGroup || deviceMaster?.monitorGroup || '';
+      const ward = r.ward || deviceMaster?.ward || '';
+      let badReason = '';
+      if (r.reception === 'BAD') {
+        const reasonMap = { A: '電波切れ', B: '電極確認', C: '一時退床中', D: 'その他' };
+        badReason = reasonMap[r.receptionReason || ''] || '';
+        if (r.receptionReason === 'D' && r.receptionNote) badReason += `(${r.receptionNote})`;
+      }
+      return [
+        r.date, r.timestamp.split(' ')[1] || '', ward, r.checker, monitor, r.deviceId, model,
+        r.inUse === 'YES' ? '使用中' : '未使用',
+        r.reception === 'GOOD' ? '良好' : (r.reception === 'BAD' ? '不良' : '-'),
+        badReason, `"${r.note || ''}"`,
+        r.isBroken === 'YES' ? '破損あり' : (r.isBroken === 'NO' ? 'なし' : '-'),
+        r.channelCheck === 'OK' ? 'OK' : (r.channelCheck === 'NG' ? 'NG' : '-'),
+      ].join(',');
+    });
+
+    const csvContent = "data:text/csv;charset=utf-8," + [header.join(','), ...rows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `送信機点検結果_${fileNameDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const executeSave = () => {
     setShowConfirmSave(false);
@@ -374,7 +413,7 @@ function App() {
 
       {showSettings && <SettingsModal devices={devices} staffList={staffList} transmitterModels={transmitterModels} wardList={wardList} onClose={() => setShowSettings(false)} />}
       
-      {showHistory && <HistoryModal db={db} appId={appId} devices={devices} wardList={wardList} onClose={() => setShowHistory(false)} />}
+      {showHistory && <HistoryModal db={db} appId={appId} devices={devices} wardList={wardList} onClose={() => setShowHistory(false)} onDownloadCSV={handleDownloadCSV} />}
 
       {/* 個別機器履歴モーダル */}
       {historyTargetDevice && (
@@ -1107,11 +1146,66 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
 function StaffMasterEditor({ list, onSave, onDelete }) {
   const [formData, setFormData] = useState({ id: '', name: '' });
   const [editItem, setEditItem] = useState(null);
+  
+  // Drag State
+  const [draggedItem, setDraggedItem] = useState(null);
 
   useEffect(() => {
     if (editItem) setFormData(editItem);
     else setFormData({ id: crypto.randomUUID(), name: '' });
   }, [editItem]);
+
+  // Drag Handlers
+  const handleDragStart = (e, item) => {
+    // Prevent drag if clicking buttons
+    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+      e.preventDefault();
+      return;
+    }
+    setDraggedItem(item);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = async (e, targetItem) => {
+    e.preventDefault();
+    if (!draggedItem || draggedItem.id === targetItem.id) return;
+
+    const currentList = [...list];
+    const fromIndex = currentList.findIndex(i => i.id === draggedItem.id);
+    const toIndex = currentList.findIndex(i => i.id === targetItem.id);
+    
+    if (fromIndex === -1 || toIndex === -1) return;
+
+    const newList = [...currentList];
+    const [moved] = newList.splice(fromIndex, 1);
+    newList.splice(toIndex, 0, moved);
+
+    // Batch update all items with new sortOrder
+    const batch = writeBatch(db);
+    newList.forEach((item, index) => {
+        const ref = doc(db, 'artifacts', appId, 'public', 'data', 'staff', item.id);
+        batch.update(ref, { sortOrder: index + 1 });
+    });
+    await batch.commit();
+    setDraggedItem(null);
+  };
+
+  const handleSaveWrapper = (data) => {
+      // Calculate Sort Order if new
+      if (!editItem) { 
+          const maxSort = list.length > 0 ? Math.max(...list.map(i => i.sortOrder || 0)) : 0;
+          onSave({ ...data, sortOrder: maxSort + 1 });
+      } else {
+          onSave(data);
+      }
+      setFormData({id: crypto.randomUUID(), name:''});
+      setEditItem(null);
+  };
 
   return (
     <div className="space-y-4">
@@ -1120,13 +1214,23 @@ function StaffMasterEditor({ list, onSave, onDelete }) {
         <div className="flex gap-2">
           <input className="border p-2 rounded flex-1" placeholder="氏名" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
           {editItem && <button onClick={() => setEditItem(null)} className="px-3 py-1 bg-gray-300 rounded">キャンセル</button>}
-          <button disabled={!formData.name} onClick={() => { onSave(formData); setFormData({id: crypto.randomUUID(), name:''}); setEditItem(null); }} className="px-3 py-1 bg-blue-600 text-white rounded flex items-center gap-1"><Save size={16}/> 保存</button>
+          <button disabled={!formData.name} onClick={() => handleSaveWrapper(formData)} className="px-3 py-1 bg-blue-600 text-white rounded flex items-center gap-1"><Save size={16}/> 保存</button>
         </div>
       </div>
       <div className="space-y-2">
         {list.map(s => (
-          <div key={s.id} className="bg-white p-3 rounded shadow flex justify-between items-center">
-            <span className="font-bold">{s.name}</span>
+          <div 
+            key={s.id} 
+            className="bg-white p-3 rounded shadow flex justify-between items-center cursor-move active:bg-blue-50"
+            draggable="true"
+            onDragStart={(e) => handleDragStart(e, s)}
+            onDragOver={handleDragOver}
+            onDrop={(e) => handleDrop(e, s)}
+          >
+            <div className="flex items-center gap-2 pointer-events-none">
+                <Menu size={16} className="text-gray-400" />
+                <span className="font-bold">{s.name}</span>
+            </div>
             <div className="flex gap-2">
               <button onClick={() => setEditItem(s)} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={18}/></button>
               <button onClick={() => onDelete(s.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={18}/></button>
@@ -1142,14 +1246,63 @@ function StaffMasterEditor({ list, onSave, onDelete }) {
 function TransmitterModelEditor({ list, onSave, onDelete }) {
   const [formData, setFormData] = useState({ id: '', name: '', type: 'TRANSMITTER' });
   const [editItem, setEditItem] = useState(null);
+  
+  // Drag State
+  const [draggedItem, setDraggedItem] = useState(null);
 
   useEffect(() => {
     if (editItem) setFormData(editItem);
     else setFormData({ id: '', name: '', type: 'TRANSMITTER' });
   }, [editItem]);
 
+  // Drag Handlers
+  const handleDragStart = (e, item) => {
+    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+      e.preventDefault();
+      return;
+    }
+    setDraggedItem(item);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = async (e, targetItem) => {
+    e.preventDefault();
+    if (!draggedItem || draggedItem.id === targetItem.id) return;
+
+    const currentList = [...list];
+    const fromIndex = currentList.findIndex(i => i.id === draggedItem.id);
+    const toIndex = currentList.findIndex(i => i.id === targetItem.id);
+    
+    if (fromIndex === -1 || toIndex === -1) return;
+
+    const newList = [...currentList];
+    const [moved] = newList.splice(fromIndex, 1);
+    newList.splice(toIndex, 0, moved);
+
+    // Batch update
+    const batch = writeBatch(db);
+    newList.forEach((item, index) => {
+        const ref = doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', item.id);
+        batch.update(ref, { sortOrder: index + 1 });
+    });
+    await batch.commit();
+    setDraggedItem(null);
+  };
+
   const handleSubmit = async () => {
-    const itemToSave = editItem ? formData : { ...formData, id: formData.name }; 
+    let itemToSave = editItem ? formData : { ...formData, id: formData.name };
+    
+    // Add sortOrder if new
+    if (!editItem) {
+        const maxSort = list.length > 0 ? Math.max(...list.map(i => i.sortOrder || 0)) : 0;
+        itemToSave = { ...itemToSave, sortOrder: maxSort + 1 };
+    }
+
     await onSave(itemToSave);
     setFormData({ id: '', name: '', type: 'TRANSMITTER' });
     setEditItem(null);
@@ -1171,8 +1324,18 @@ function TransmitterModelEditor({ list, onSave, onDelete }) {
       </div>
       <div className="space-y-2">
         {list.map(m => (
-          <div key={m.id} className="bg-white p-3 rounded shadow flex justify-between items-center">
-            <div><span className={`text-xs px-2 py-0.5 rounded mr-2 ${m.type === 'TRANSMITTER' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800'}`}>{m.type === 'TRANSMITTER' ? '送信機' : 'モニタ'}</span><span className="font-bold">{m.name}</span></div>
+          <div 
+            key={m.id} 
+            className="bg-white p-3 rounded shadow flex justify-between items-center cursor-move active:bg-blue-50"
+            draggable="true"
+            onDragStart={(e) => handleDragStart(e, m)}
+            onDragOver={handleDragOver}
+            onDrop={(e) => handleDrop(e, m)}
+          >
+            <div className="flex items-center gap-2 pointer-events-none">
+                <Menu size={16} className="text-gray-400" />
+                <span className={`text-xs px-2 py-0.5 rounded mr-2 ${m.type === 'TRANSMITTER' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800'}`}>{m.type === 'TRANSMITTER' ? '送信機' : 'モニタ'}</span><span className="font-bold">{m.name}</span>
+            </div>
             <div className="flex gap-2">
               <button onClick={() => setEditItem(m)} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={18}/></button>
               <button onClick={() => onDelete(m.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={18}/></button>
@@ -1190,7 +1353,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
   const [historyRecords, setHistoryRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterMode, setFilterMode] = useState('ALL');
-  const [searchTerm, setSearchTerm] = useState(''); 
+  const [searchTerm, setSearchTerm] = useState(''); // Added Search state
   const [showExportModal, setShowExportModal] = useState(false); // CSV出力モーダル表示用
   
   const [expandedDates, setExpandedDates] = useState({});
@@ -1201,6 +1364,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
       const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'));
       const snapshot = await getDocs(q);
       const list = snapshot.docs.map(d => d.data());
+      // 保存順(タイムスタンプ降順)でまずは取得
       list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       setHistoryRecords(list);
       setLoading(false);
@@ -1214,6 +1378,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
          if (!(r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG')) return false;
       }
       
+      // Search Logic
       if (searchTerm) {
           const lower = searchTerm.toLowerCase();
           const match = 
@@ -1236,6 +1401,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
     return { total, utilization: Math.round((inUseCount / total) * 100), issueRate: Math.round((issueCount / total) * 100), issueCount };
   }, [historyRecords]);
 
+  // マスタ情報を使ってソート順を決定するヘルパー
   const getDeviceSortOrder = (deviceId) => {
     const d = devices.find(dev => dev.id === deviceId);
     return d ? (d.sortOrder ?? 9999) : 9999;
@@ -1246,22 +1412,28 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
     return w ? (w.sortOrder ?? 9999) : 9999;
   };
 
+  // 履歴のグルーピングとソート (日付 > 病棟 > モニタ > 機器)
   const groupedHistory = useMemo(() => {
     const groups = {};
     
+    // まず日付でまとめる
     filteredRecords.forEach(r => {
       if (!groups[r.date]) groups[r.date] = [];
       groups[r.date].push(r);
     });
 
+    // 日付ごとにマスタ順でソート
     Object.keys(groups).forEach(date => {
       groups[date].sort((a, b) => {
+         // 1. 病棟順
          const wa = getWardSortOrder(a.ward);
          const wb = getWardSortOrder(b.ward);
          if (wa !== wb) return wa - wb;
          
+         // 2. モニタグループ順 (文字列比較)
          if (a.monitorGroup !== b.monitorGroup) return a.monitorGroup.localeCompare(b.monitorGroup);
 
+         // 3. 機器順 (sortOrder)
          const da = getDeviceSortOrder(a.deviceId);
          const db = getDeviceSortOrder(b.deviceId);
          return da - db;
@@ -1271,6 +1443,8 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
     return groups;
   }, [filteredRecords, devices, wardList]);
 
+  // 表示用に階層化されたデータを生成する
+  // 構造: { [date]: [ { ward: '...', monitors: [ { name: '...', records: [...] } ] } ] }
   const displayStructure = useMemo(() => {
       const result = {};
       Object.entries(groupedHistory).forEach(([date, records]) => {
@@ -1282,16 +1456,17 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
               wardMap[r.ward][r.monitorGroup].push(r);
           });
           
+          // 病棟順に並べ替え
           const sortedWardKeys = Object.keys(wardMap).sort((a, b) => getWardSortOrder(a) - getWardSortOrder(b));
           
           result[date] = sortedWardKeys.map(ward => {
               const monitorMap = wardMap[ward];
-              const sortedMonitors = Object.keys(monitorMap).sort(); 
+              const sortedMonitors = Object.keys(monitorMap).sort(); // モニタ名は名前順
               return {
                   wardName: ward,
                   monitors: sortedMonitors.map(mon => ({
                       monitorName: mon,
-                      records: monitorMap[mon]
+                      records: monitorMap[mon] // レコードはすでにsortOrder順
                   }))
               };
           });
@@ -1299,15 +1474,19 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
       return result;
   }, [groupedHistory]);
 
+  // 最新の日付を初期展開
   useEffect(() => {
     if (Object.keys(displayStructure).length > 0) {
+        // キーは日付文字列（YYYY-MM-DDなど）だが、ソート順はgroupedHistory作成時に保証されていないため、念のためソートして最新を取得
+        // ただし、groupedHistoryのキー取得順序はブラウザ依存もあるが、今回は日付降順で表示したい
         const sortedDates = Object.keys(displayStructure).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
         if (sortedDates.length > 0) {
             setExpandedDates(prev => ({ ...prev, [sortedDates[0]]: true }));
         }
     }
-  }, [displayStructure]); 
+  }, [displayStructure]); // displayStructureが変わったとき（初回ロード時含む）に実行
 
+  // 受信不良の理由コードを日本語に変換するマップ
   const receptionReasonMap = { 
     A: '電波切れ', 
     B: '電極確認', 
