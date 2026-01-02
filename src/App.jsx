@@ -211,19 +211,21 @@ function App() {
   // 保存処理 (インラインフォームから呼ばれる)
   // action: 'NEXT' | 'PREV' | 'CLOSE'
   const handleSaveRecord = async (record, action = 'CLOSE') => {
-    const deviceMaster = devices.find(d => d.id === record.deviceId);
-    if(!deviceMaster) return;
-
-    const docId = `${record.date}_${record.deviceId}`;
-    const recordWithSnapshot = { 
-        ...record, 
-        model: deviceMaster.model, 
-        monitorGroup: deviceMaster.monitorGroup, 
-        ward: deviceMaster.ward 
-    };
-    
-    // Firestoreに保存
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId), recordWithSnapshot);
+    // 修正: inUseがnull（未入力）の場合は保存をスキップする
+    if (record.inUse !== null) {
+        const deviceMaster = devices.find(d => d.id === record.deviceId);
+        if(deviceMaster) {
+            const docId = `${record.date}_${record.deviceId}`;
+            const recordWithSnapshot = { 
+                ...record, 
+                model: deviceMaster.model, 
+                monitorGroup: deviceMaster.monitorGroup, 
+                ward: deviceMaster.ward 
+            };
+            // Firestoreに保存
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId), recordWithSnapshot);
+        }
+    }
 
     // ナビゲーション処理
     if (action === 'NEXT' || action === 'PREV') {
@@ -529,17 +531,17 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
   };
 
   const handleSave = () => {
-    if (inUse === null) { alert('「①使用中ですか？」のどちらかを選択してください'); return; }
+    // 修正: inUseチェックを削除して閉じる
     onSave(createRecord(), 'CLOSE'); 
   };
   
   const handleSaveAndNext = () => {
-    if (inUse === null) { alert('「①使用中ですか？」のどちらかを選択してください'); return; }
+    // 修正: inUseチェックを削除して次へ
     onSave(createRecord(), 'NEXT'); 
   };
 
   const handleSaveAndPrev = () => {
-    if (inUse === null) { alert('「①使用中ですか？」のどちらかを選択してください'); return; }
+    // 修正: inUseチェックを削除して前へ
     onSave(createRecord(), 'PREV');
   };
   
@@ -603,7 +605,8 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
       {/* 修正: grid-cols-4 -> grid-cols-3 に変更し、ボタン幅を均等化 */}
       <div className="pt-2 grid grid-cols-3 gap-3">
         {/* 戻る */}
-        <button onClick={handleSaveAndPrev} disabled={isSelectionRequired} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all ${isSelectionRequired ? 'bg-gray-100 text-gray-300' : 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-95'}`}>
+        {/* 修正: disabled制御を削除 */}
+        <button onClick={handleSaveAndPrev} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-95`}>
             <ArrowLeft size={24}/>
         </button>
 
@@ -620,8 +623,8 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
         </div>
         
         {/* 次へ (メイン) */}
-        {/* 修正: col-span-2 -> col-span-1 に変更して幅を均等化 */}
-        <button onClick={handleSaveAndNext} disabled={isSelectionRequired} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all shadow-sm ${isSelectionRequired ? 'bg-gray-200 text-gray-400' : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95'}`}>
+        {/* 修正: col-span-2 -> col-span-1 に変更して幅を均等化、disabled削除 */}
+        <button onClick={handleSaveAndNext} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all shadow-sm ${isSelectionRequired ? 'bg-blue-300 text-white' : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95'}`}>
             <ArrowRight size={24}/>
         </button>
       </div>
@@ -857,7 +860,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
       // ここではヘッダー全体をドラッグ可能とし、展開ボタン等は stopPropagation する
     }
     setDraggedWard(ward);
-    if ('dataTransfer' in e) e.dataTransfer.effectAllowed = 'move';
+    if ('dataTransfer' in e) e.dataTransfer.effectAllowed = 'move'; 
   };
   
   const handleWardDrop = async (e, targetWardName) => {
@@ -1209,6 +1212,10 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
   const [loading, setLoading] = useState(true);
   const [filterMode, setFilterMode] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState(''); // Added Search state
+  
+  // アコーディオン用state
+  const [expandedDates, setExpandedDates] = useState({});
+  const [expandedWards, setExpandedWards] = useState({});
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -1325,6 +1332,18 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
       return result;
   }, [groupedHistory]);
 
+  // 最新の日付を初期展開
+  useEffect(() => {
+    if (Object.keys(displayStructure).length > 0) {
+        // キーは日付文字列（YYYY-MM-DDなど）だが、ソート順はgroupedHistory作成時に保証されていないため、念のためソートして最新を取得
+        // ただし、groupedHistoryのキー取得順序はブラウザ依存もあるが、今回は日付降順で表示したい
+        const sortedDates = Object.keys(displayStructure).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+        if (sortedDates.length > 0) {
+            setExpandedDates(prev => ({ ...prev, [sortedDates[0]]: true }));
+        }
+    }
+  }, [displayStructure]); // displayStructureが変わったとき（初回ロード時含む）に実行
+
   // 受信不良の理由コードを日本語に変換するマップ
   const receptionReasonMap = { 
     A: '電波切れ', 
@@ -1332,6 +1351,18 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
     C: '一時退床中', 
     D: 'その他' 
   };
+
+  const toggleDate = (date) => {
+      setExpandedDates(prev => ({ ...prev, [date]: !prev[date] }));
+  };
+
+  const toggleWard = (date, ward) => {
+      const key = `${date}_${ward}`;
+      setExpandedWards(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  // 日付降順でソート
+  const sortedDateKeys = Object.keys(displayStructure).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -1371,70 +1402,106 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
         <div className="flex-1 overflow-y-auto p-4 bg-gray-100">
           {loading ? <div className="text-center p-10 text-gray-500">データを読み込んでいます...</div> : (
             <div className="space-y-6">
-              {Object.keys(displayStructure).length === 0 && <div className="text-center p-10 text-gray-400">該当するデータがありません</div>}
-              {Object.entries(displayStructure).map(([date, wardsData]) => (
+              {sortedDateKeys.length === 0 && <div className="text-center p-10 text-gray-400">該当するデータがありません</div>}
+              {sortedDateKeys.map((date) => {
+                const wardsData = displayStructure[date];
+                // 担当者の集計
+                const checkers = Array.from(new Set(
+                    wardsData.flatMap(w => w.monitors.flatMap(m => m.records.map(r => r.checker)))
+                )).filter(Boolean).join(', ');
+
+                return (
                 <div key={date} className="bg-white rounded-lg shadow border border-gray-200 overflow-hidden">
-                  <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 flex justify-between items-center">
-                    <div className="flex items-center gap-2 font-bold text-gray-700"><Calendar size={16}/> {date}</div>
-                    <button onClick={() => onDownloadCSV(groupedHistory[date], date)} className="text-xs flex items-center gap-1 text-green-600 hover:bg-green-50 px-2 py-1 rounded transition-colors"><Download size={12}/> この日をCSV出力</button>
+                  <div 
+                    onClick={() => toggleDate(date)} 
+                    className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center cursor-pointer hover:bg-gray-100 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2 font-bold text-gray-700 text-lg"><Calendar size={20}/> {date}</div>
+                        {checkers && <div className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100 flex items-center gap-1"><User size={12}/> {checkers}</div>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button onClick={(e) => { e.stopPropagation(); onDownloadCSV(groupedHistory[date], date); }} className="text-xs flex items-center gap-1 text-green-600 hover:bg-green-100 bg-white border border-green-200 px-3 py-1.5 rounded transition-colors mr-2"><Download size={14}/> CSV</button>
+                        {expandedDates[date] ? <ChevronUp size={20} className="text-gray-400"/> : <ChevronDown size={20} className="text-gray-400"/>}
+                    </div>
                   </div>
                   
-                  {/* 病棟ごとのループ */}
-                  {wardsData.map(wardData => (
-                    <div key={wardData.wardName}>
-                         <div className="bg-blue-50/50 px-4 py-1 text-xs font-bold text-blue-800 border-b border-blue-100 flex items-center gap-1">
-                             <MapPin size={12}/> {wardData.wardName}
-                         </div>
-                         
-                         {/* モニタごとのループ */}
-                         {wardData.monitors.map(monitorData => (
-                             <div key={monitorData.monitorName} className="border-b border-gray-100 last:border-b-0">
-                                 <div className="bg-gray-50/50 px-4 py-1 text-xs font-bold text-gray-500 border-b border-gray-100 flex items-center gap-1 pl-6">
-                                     <Monitor size={10}/> {monitorData.monitorName}
-                                 </div>
-                                 <div className="divide-y divide-gray-100">
-                                     {monitorData.records.map((r, i) => {
-                                          const isIssue = r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG';
-                                          const receptionText = r.receptionReason ? `${r.receptionReason}: ${receptionReasonMap[r.receptionReason] || ''}` : '';
-                                          const extraInfo = [];
-                                          if (r.receptionReason === 'D' && r.receptionNote) extraInfo.push(`その他理由: ${r.receptionNote}`);
-                                          if (r.note) extraInfo.push(`備考: ${r.note}`);
+                  {expandedDates[date] && (
+                    <div className="animate-slide-up">
+                      {/* 病棟ごとのループ */}
+                      {wardsData.map(wardData => {
+                        const wardKey = `${date}_${wardData.wardName}`;
+                        const isWardExpanded = expandedWards[wardKey] !== false; // デフォルトで開くなら true 扱い、あるいはステート初期化が必要。ここではクリックで開閉できるようにするが、初期は開いておく？「対象のデータを下に表示したり格納したり」なので、初期は閉じておくか開けておくか。とりあえず開けておく実装（undefinedなら開く）にするか、明示的に管理するか。今回は明示的に管理せず、クリックしたらstateにセットされる方式（初期は閉じてる＝undefinedでfalsy）だと全部閉じてしまう。
+                        // なので、初期状態は「未定義なら開く」または「expandedWardsに初期値を入れる」
+                        // 簡易的に「未定義なら開く(true)」とする
+                        const isOpen = expandedWards[wardKey] !== false;
 
-                                          return (
-                                            <div key={i} className={`p-3 text-sm flex flex-col gap-2 hover:bg-gray-50 ${isIssue ? 'bg-red-50/50' : ''}`}>
-                                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                                                <div className="flex items-center gap-3">
-                                                    <span className="text-gray-400 text-xs font-mono">{r.timestamp.split(' ')[1]}</span>
-                                                    <span className="font-bold w-16 text-lg">{r.deviceId}</span>
-                                                    {/* 病棟・モニタ名はヘッダーに出ているのでここでは省略可だが、詳細表示として残すか判断。ここではシンプルにするため省略 */}
-                                                    <span className="text-xs text-gray-500 ml-2">{r.model}</span>
-                                                </div>
-                                                <div className="flex items-center gap-4">
-                                                    {r.inUse === 'YES' ? <span className="text-blue-600 text-xs bg-blue-50 px-2 py-0.5 rounded border border-blue-100">使用中</span> : <span className="text-gray-400 text-xs">未使用</span>}
-                                                    {r.reception === 'BAD' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertTriangle size={12}/> 受信不良 ({receptionText})</span>}
-                                                    {r.isBroken === 'YES' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertOctagon size={12}/> 破損あり</span>}
-                                                    {r.channelCheck === 'NG' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertTriangle size={12}/> ch不一致</span>}
-                                                    {!isIssue && r.inUse === 'YES' && <span className="text-green-600 text-xs flex items-center gap-1"><CheckCircle size={12}/> 良好</span>}
-                                                </div>
-                                              </div>
-                                              {/* 詳細情報表示エリア */}
-                                              {extraInfo.length > 0 && (
-                                                <div className="ml-10 sm:ml-24 text-xs text-gray-600 flex flex-col gap-1 bg-white/50 p-2 rounded border border-gray-100">
-                                                    {extraInfo.map((info, idx) => (
-                                                        <div key={idx} className="flex items-start gap-1"><MessageSquare size={12} className="mt-0.5 text-gray-400 shrink-0"/> {info}</div>
-                                                    ))}
-                                                </div>
-                                              )}
-                                            </div>
-                                          );
-                                     })}
-                                 </div>
+                        return (
+                        <div key={wardData.wardName}>
+                             <div 
+                                onClick={() => toggleWard(date, wardData.wardName)}
+                                className="bg-blue-50/50 px-4 py-2 text-sm font-bold text-blue-800 border-b border-blue-100 flex justify-between items-center cursor-pointer hover:bg-blue-100/50"
+                             >
+                                 <div className="flex items-center gap-2"><MapPin size={16}/> {wardData.wardName}</div>
+                                 {isOpen ? <ChevronUp size={16} className="text-blue-400"/> : <ChevronDown size={16} className="text-blue-400"/>}
                              </div>
-                         ))}
+                             
+                             {isOpen && (
+                                 <div className="animate-slide-up">
+                                     {/* モニタごとのループ */}
+                                     {wardData.monitors.map(monitorData => (
+                                         <div key={monitorData.monitorName} className="border-b border-gray-100 last:border-b-0">
+                                             <div className="bg-gray-50/30 px-4 py-1 text-xs font-bold text-gray-500 border-b border-gray-100 flex items-center gap-1 pl-8">
+                                                 <Monitor size={12}/> {monitorData.monitorName}
+                                             </div>
+                                             <div className="divide-y divide-gray-100">
+                                                 {monitorData.records.map((r, i) => {
+                                                      const isIssue = r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG';
+                                                      const receptionText = r.receptionReason ? `${r.receptionReason}: ${receptionReasonMap[r.receptionReason] || ''}` : '';
+                                                      const extraInfo = [];
+                                                      if (r.receptionReason === 'D' && r.receptionNote) extraInfo.push(`その他理由: ${r.receptionNote}`);
+                                                      if (r.note) extraInfo.push(`備考: ${r.note}`);
+    
+                                                      return (
+                                                        <div key={i} className={`p-3 text-sm flex flex-col gap-2 hover:bg-gray-50 ${isIssue ? 'bg-red-50/50' : ''}`}>
+                                                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                                            <div className="flex items-center gap-3">
+                                                                <span className="text-gray-400 text-xs font-mono">{r.timestamp.split(' ')[1]}</span>
+                                                                <span className="font-bold w-16 text-lg">{r.deviceId}</span>
+                                                                <span className="text-xs text-gray-500 ml-2">{r.model}</span>
+                                                            </div>
+                                                            <div className="flex items-center gap-4">
+                                                                {r.inUse === 'YES' ? <span className="text-blue-600 text-xs bg-blue-50 px-2 py-0.5 rounded border border-blue-100">使用中</span> : <span className="text-gray-400 text-xs">未使用</span>}
+                                                                {r.reception === 'BAD' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertTriangle size={12}/> 受信不良 ({receptionText})</span>}
+                                                                {r.isBroken === 'YES' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertOctagon size={12}/> 破損あり</span>}
+                                                                {r.channelCheck === 'NG' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertTriangle size={12}/> ch不一致</span>}
+                                                                {!isIssue && r.inUse === 'YES' && <span className="text-green-600 text-xs flex items-center gap-1"><CheckCircle size={12}/> 良好</span>}
+                                                            </div>
+                                                          </div>
+                                                          {/* 詳細情報表示エリア */}
+                                                          {extraInfo.length > 0 && (
+                                                            <div className="ml-10 sm:ml-24 text-xs text-gray-600 flex flex-col gap-1 bg-white/50 p-2 rounded border border-gray-100">
+                                                                {extraInfo.map((info, idx) => (
+                                                                    <div key={idx} className="flex items-start gap-1"><MessageSquare size={12} className="mt-0.5 text-gray-400 shrink-0"/> {info}</div>
+                                                                ))}
+                                                            </div>
+                                                          )}
+                                                        </div>
+                                                      );
+                                                 })}
+                                             </div>
+                                         </div>
+                                     ))}
+                                 </div>
+                             )}
+                        </div>
+                      );
+                      })}
                     </div>
-                  ))}
+                  )}
                 </div>
-              ))}
+              );
+              })}
             </div>
           )}
         </div>
