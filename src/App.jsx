@@ -4,7 +4,7 @@ import {
   Activity, Filter, MapPin, Monitor, Settings, User, Plus, Trash2, Edit2, 
   History, LogOut, FileText, ChevronDown, ChevronUp, ArrowRight, ArrowLeft,
   Server, Grid, Layers, Menu, BarChart2, Calendar, AlertOctagon, HelpCircle,
-  Cloud, Clock, FastForward
+  Cloud, Clock, FastForward, MessageSquare
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -419,9 +419,19 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, che
   }, [isExpanded]);
 
   let hasIssue = false;
+  let hasNote = false;
   if (record) {
     if (record.inUse === 'YES' && record.reception === 'BAD') hasIssue = true;
     if (record.inUse === 'NO' && (record.isBroken === 'YES' || record.channelCheck === 'NG')) hasIssue = true;
+    if (record.note && record.note.trim() !== '') hasNote = true;
+  }
+
+  // 優先順位: 不具合(赤) > 備考あり(オレンジ) > 正常(緑)
+  let statusColorClass = 'bg-gray-50'; // 未実施
+  if (isChecked) {
+      if (hasIssue) statusColorClass = 'bg-red-50';
+      else if (hasNote) statusColorClass = 'bg-orange-50';
+      else statusColorClass = 'bg-green-50';
   }
 
   return (
@@ -429,15 +439,13 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, che
       <div 
         onClick={onToggle} 
         className={`p-4 flex justify-between items-center cursor-pointer active:bg-gray-50 
-        ${isChecked && hasIssue ? 'bg-red-50' : ''} 
-        ${isChecked && !hasIssue ? 'bg-green-50' : ''}
-        ${isExpanded ? '!bg-transparent' : ''}
+        ${!isExpanded ? statusColorClass : '!bg-transparent'}
         `}
       >
         <div>
           <div className="flex items-center gap-2">
-            <span className={`text-xl font-bold font-mono ${isChecked ? (hasIssue ? 'text-red-700' : 'text-green-700') : 'text-gray-800'}`}>ch: {device.id}</span>
-            {isChecked && !hasIssue && <CheckCircle size={18} className="text-green-600" />}
+            <span className={`text-xl font-bold font-mono ${isChecked ? (hasIssue ? 'text-red-700' : (hasNote ? 'text-orange-700' : 'text-green-700')) : 'text-gray-800'}`}>ch: {device.id}</span>
+            {isChecked && !hasIssue && <CheckCircle size={18} className={hasNote ? 'text-orange-500' : 'text-green-600'} />}
             {hasIssue && <AlertTriangle size={18} className="text-red-500" />}
           </div>
           <div className="text-xs text-gray-500 mt-1 ml-1">{device.model}</div>
@@ -446,7 +454,7 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, che
           {isChecked ? (
             hasIssue 
               ? <span className="text-xs font-bold text-red-700 mr-2 bg-red-100 px-2 py-1 rounded border border-red-200">要確認</span>
-              : <span className="text-xs font-bold text-green-700 mr-2 bg-green-100 px-2 py-1 rounded border border-green-200">点検済</span>
+              : <span className={`text-xs font-bold mr-2 px-2 py-1 rounded border ${hasNote ? 'text-orange-700 bg-orange-100 border-orange-200' : 'text-green-700 bg-green-100 border-green-200'}`}>{hasNote ? '備考あり' : '点検済'}</span>
           ) : (
             <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded mr-2 border border-gray-200">未実施</span>
           )}
@@ -1221,6 +1229,14 @@ function HistoryModal({ db, appId, onClose, onDownloadCSV }) {
     return groups;
   }, [filteredRecords]);
 
+  // 受信不良の理由コードを日本語に変換するマップ
+  const receptionReasonMap = { 
+    A: '電波切れ', 
+    B: '電極確認', 
+    C: '一時退床中', 
+    D: 'その他' 
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
       <div className="bg-white w-full max-w-4xl h-[90vh] rounded-xl shadow-2xl overflow-hidden flex flex-col">
@@ -1269,21 +1285,36 @@ function HistoryModal({ db, appId, onClose, onDownloadCSV }) {
                   <div className="divide-y divide-gray-100">
                     {records.map((r, i) => {
                       const isIssue = r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG';
+                      const receptionText = r.receptionReason ? `${r.receptionReason}: ${receptionReasonMap[r.receptionReason] || ''}` : '';
+                      const extraInfo = [];
+                      if (r.receptionReason === 'D' && r.receptionNote) extraInfo.push(`その他理由: ${r.receptionNote}`);
+                      if (r.note) extraInfo.push(`備考: ${r.note}`);
+
                       return (
-                        <div key={i} className={`p-3 text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-gray-50 ${isIssue ? 'bg-red-50/50' : ''}`}>
-                          <div className="flex items-center gap-3">
-                            <span className="text-gray-400 text-xs font-mono">{r.timestamp.split(' ')[1]}</span>
-                            <span className="font-bold w-16">{r.deviceId}</span>
-                            <span className="text-xs bg-gray-200 px-2 py-0.5 rounded text-gray-600">{r.ward}</span>
-                            <span className="text-xs text-gray-500 hidden sm:inline">{r.monitorGroup}</span>
+                        <div key={i} className={`p-3 text-sm flex flex-col gap-2 hover:bg-gray-50 ${isIssue ? 'bg-red-50/50' : ''}`}>
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div className="flex items-center gap-3">
+                                <span className="text-gray-400 text-xs font-mono">{r.timestamp.split(' ')[1]}</span>
+                                <span className="font-bold w-16">{r.deviceId}</span>
+                                <span className="text-xs bg-gray-200 px-2 py-0.5 rounded text-gray-600">{r.ward}</span>
+                                <span className="text-xs text-gray-500 hidden sm:inline">{r.monitorGroup}</span>
+                            </div>
+                            <div className="flex items-center gap-4">
+                                {r.inUse === 'YES' ? <span className="text-blue-600 text-xs bg-blue-50 px-2 py-0.5 rounded border border-blue-100">使用中</span> : <span className="text-gray-400 text-xs">未使用</span>}
+                                {r.reception === 'BAD' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertTriangle size={12}/> 受信不良 ({receptionText})</span>}
+                                {r.isBroken === 'YES' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertOctagon size={12}/> 破損あり</span>}
+                                {r.channelCheck === 'NG' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertTriangle size={12}/> ch不一致</span>}
+                                {!isIssue && r.inUse === 'YES' && <span className="text-green-600 text-xs flex items-center gap-1"><CheckCircle size={12}/> 良好</span>}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-4">
-                            {r.inUse === 'YES' ? <span className="text-blue-600 text-xs bg-blue-50 px-2 py-0.5 rounded border border-blue-100">使用中</span> : <span className="text-gray-400 text-xs">未使用</span>}
-                            {r.reception === 'BAD' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertTriangle size={12}/> 受信不良 ({r.receptionReason})</span>}
-                            {r.isBroken === 'YES' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertOctagon size={12}/> 破損あり</span>}
-                            {r.channelCheck === 'NG' && <span className="flex items-center gap-1 text-red-600 font-bold text-xs bg-red-100 px-2 py-0.5 rounded"><AlertTriangle size={12}/> ch不一致</span>}
-                            {!isIssue && r.inUse === 'YES' && <span className="text-green-600 text-xs flex items-center gap-1"><CheckCircle size={12}/> 良好</span>}
-                          </div>
+                          {/* 詳細情報表示エリア */}
+                          {extraInfo.length > 0 && (
+                            <div className="ml-10 sm:ml-24 text-xs text-gray-600 flex flex-col gap-1 bg-white/50 p-2 rounded border border-gray-100">
+                                {extraInfo.map((info, idx) => (
+                                    <div key={idx} className="flex items-start gap-1"><MessageSquare size={12} className="mt-0.5 text-gray-400 shrink-0"/> {info}</div>
+                                ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
