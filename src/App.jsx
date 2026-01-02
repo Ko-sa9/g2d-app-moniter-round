@@ -161,41 +161,6 @@ function App() {
     return Math.round((checkedCount / devices.length) * 100);
   }, [devices, records]);
 
-  // CSV出力
-  const handleDownloadCSV = (targetRecords, fileNameDate) => {
-    const list = Array.isArray(targetRecords) ? targetRecords : Object.values(targetRecords);
-    const header = ['点検日', '時間', '病棟', '点検者', 'モニタ', 'ch', '送信機型番', '①使用中', '②受信状態', '不良理由', '備考', '③破損', '④ch確認'];
-    const rows = list.map(r => {
-      const deviceMaster = devices.find(d => d.id === r.deviceId);
-      const model = r.model || deviceMaster?.model || '';
-      const monitor = r.monitorGroup || deviceMaster?.monitorGroup || '';
-      const ward = r.ward || deviceMaster?.ward || '';
-      let badReason = '';
-      if (r.reception === 'BAD') {
-        const reasonMap = { A: '電波切れ', B: '電極確認', C: '一時退床中', D: 'その他' };
-        badReason = reasonMap[r.receptionReason || ''] || '';
-        if (r.receptionReason === 'D' && r.receptionNote) badReason += `(${r.receptionNote})`;
-      }
-      return [
-        r.date, r.timestamp.split(' ')[1] || '', ward, r.checker, monitor, r.deviceId, model,
-        r.inUse === 'YES' ? '使用中' : '未使用',
-        r.reception === 'GOOD' ? '良好' : (r.reception === 'BAD' ? '不良' : '-'),
-        badReason, `"${r.note || ''}"`,
-        r.isBroken === 'YES' ? '破損あり' : (r.isBroken === 'NO' ? 'なし' : '-'),
-        r.channelCheck === 'OK' ? 'OK' : (r.channelCheck === 'NG' ? 'NG' : '-'),
-      ].join(',');
-    });
-
-    const csvContent = "data:text/csv;charset=utf-8," + [header.join(','), ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `送信機点検結果_${fileNameDate}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
   const executeSave = () => {
     setShowConfirmSave(false);
   };
@@ -409,7 +374,7 @@ function App() {
 
       {showSettings && <SettingsModal devices={devices} staffList={staffList} transmitterModels={transmitterModels} wardList={wardList} onClose={() => setShowSettings(false)} />}
       
-      {showHistory && <HistoryModal db={db} appId={appId} devices={devices} wardList={wardList} onClose={() => setShowHistory(false)} onDownloadCSV={handleDownloadCSV} />}
+      {showHistory && <HistoryModal db={db} appId={appId} devices={devices} wardList={wardList} onClose={() => setShowHistory(false)} />}
 
       {/* 個別機器履歴モーダル */}
       {historyTargetDevice && (
@@ -1220,11 +1185,13 @@ function TransmitterModelEditor({ list, onSave, onDelete }) {
 }
 
 // 5. HistoryModal (Full Dashboard)
+// 修正: devices, wardListを受け取る
 function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) {
   const [historyRecords, setHistoryRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterMode, setFilterMode] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState(''); 
+  const [showExportModal, setShowExportModal] = useState(false); // CSV出力モーダル表示用
   
   const [expandedDates, setExpandedDates] = useState({});
   const [expandedWards, setExpandedWards] = useState({});
@@ -1357,16 +1324,92 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
       setExpandedWards(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
+  // 月報CSV出力
+  const handleExportMonthly = (monthStr) => {
+      // monthStr: "YYYY-MM"
+      if (!monthStr) return;
+      
+      // 対象月のデータを抽出
+      // recordsはhistoryRecordsから
+      const targetRecords = historyRecords.filter(r => r.date.startsWith(monthStr));
+      
+      // 日付のリストを生成 (1日〜31日)
+      const year = parseInt(monthStr.split('-')[0]);
+      const month = parseInt(monthStr.split('-')[1]);
+      const lastDay = new Date(year, month, 0).getDate();
+      const days = Array.from({length: lastDay}, (_, i) => i + 1);
+      
+      // ヘッダー作成
+      const header = ['病棟', 'モニタ', 'ch', '型番', ...days.map(d => `${d}日`)];
+      
+      // データ行の作成（マスタ順に全デバイスを表示）
+      // まず全デバイスをマスタ順にソート
+      const sortedDevices = [...devices].sort((a, b) => {
+         const wa = getWardSortOrder(a.ward);
+         const wb = getWardSortOrder(b.ward);
+         if (wa !== wb) return wa - wb;
+         
+         if (a.monitorGroup !== b.monitorGroup) return a.monitorGroup.localeCompare(b.monitorGroup);
+
+         return (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999);
+      });
+
+      const rows = sortedDevices.map(device => {
+          // このデバイスの対象月のレコードを日付でマップ化
+          const deviceRecords = targetRecords.filter(r => r.deviceId === device.id);
+          const recordsByDay = {};
+          deviceRecords.forEach(r => {
+              const d = parseInt(r.date.split('-')[2]);
+              recordsByDay[d] = r;
+          });
+
+          // 各日のセル値を生成
+          const dayCells = days.map(d => {
+              const r = recordsByDay[d];
+              if (!r) return '';
+              
+              if (r.isBroken === 'YES' || r.channelCheck === 'NG') return '×';
+              if (r.reception === 'BAD' || (r.note && r.note.trim() !== '')) return '△';
+              if (r.inUse === 'YES') return '○';
+              if (r.inUse === 'NO') return '-';
+              return '';
+          });
+
+          return [
+              device.ward,
+              device.monitorGroup,
+              device.id,
+              device.model,
+              ...dayCells
+          ].join(',');
+      });
+
+      const csvContent = "data:text/csv;charset=utf-8," + [header.join(','), ...rows].join('\n');
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `送信機点検月報_${monthStr}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+  };
+
   const sortedDateKeys = Object.keys(displayStructure).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
       <div className="bg-white w-full max-w-4xl h-[90vh] rounded-xl shadow-2xl overflow-hidden flex flex-col">
         <div className="bg-gray-800 text-white p-4 flex justify-between items-center">
-          <h2 className="text-lg font-bold flex items-center gap-2"><BarChart2 size={20}/> 履歴・分析ダッシュボード</h2>
+          <div className="flex items-center gap-4">
+            <h2 className="text-lg font-bold flex items-center gap-2"><BarChart2 size={20}/> 履歴・分析ダッシュボード</h2>
+            <button onClick={() => setShowExportModal(true)} className="flex items-center gap-1 bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded transition-colors text-xs font-bold border border-white/20">
+                <Download size={14}/> CSV出力
+            </button>
+          </div>
           <button onClick={onClose}><X size={20}/></button>
         </div>
         <div className="p-4 border-b bg-gray-50 flex flex-col gap-4">
+           {/* Top Stats */}
            {stats && (
             <div className="flex gap-4 text-sm justify-end">
               <div className="bg-blue-50 px-3 py-1 rounded border border-blue-200"><span className="text-gray-500 text-xs block">稼働率</span><span className="font-bold text-lg text-blue-700">{stats.utilization}%</span></div>
@@ -1379,6 +1422,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
                 <button onClick={() => setFilterMode('ALL')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${filterMode === 'ALL' ? 'bg-blue-100 text-blue-800' : 'text-gray-500 hover:bg-gray-100'}`}>全て表示</button>
                 <button onClick={() => setFilterMode('ISSUES')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-1 ${filterMode === 'ISSUES' ? 'bg-red-100 text-red-800' : 'text-gray-500 hover:bg-gray-100'}`}><AlertTriangle size={14}/> 不具合/故障のみ</button>
             </div>
+            {/* Search Bar */}
             <div className="relative flex-1 max-w-xs">
                 <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
                 <input 
@@ -1413,7 +1457,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
                         {checkers && <div className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100 flex items-center gap-1"><User size={12}/> {checkers}</div>}
                     </div>
                     <div className="flex items-center gap-2">
-                        <button onClick={(e) => { e.stopPropagation(); onDownloadCSV(groupedHistory[date], date); }} className="text-xs flex items-center gap-1 text-green-600 hover:bg-green-100 bg-white border border-green-200 px-3 py-1.5 rounded transition-colors mr-2"><Download size={14}/> CSV</button>
+                        {/* 修正: 日付行のCSVボタンは削除 */}
                         {expandedDates[date] ? <ChevronUp size={20} className="text-gray-400"/> : <ChevronDown size={20} className="text-gray-400"/>}
                     </div>
                   </div>
@@ -1492,11 +1536,72 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
           )}
         </div>
       </div>
+      {/* CSV Export Modal */}
+      {showExportModal && (
+          <CSVExportModal 
+            onClose={() => setShowExportModal(false)}
+            onExportDaily={(date) => {
+                // historyRecords から対象日のデータを探す
+                const targets = historyRecords.filter(r => r.date === date);
+                if(targets.length === 0) return alert('該当日のデータがありません');
+                onDownloadCSV(targets, date);
+                setShowExportModal(false);
+            }}
+            onExportMonthly={(month) => {
+                handleExportMonthly(month);
+                setShowExportModal(false);
+            }}
+          />
+      )}
     </div>
   );
 }
 
-// 6. DeviceHistoryModal (New)
+// 7. CSVExportModal (New)
+function CSVExportModal({ onClose, onExportDaily, onExportMonthly }) {
+    const [mode, setMode] = useState('DAILY'); // DAILY | MONTHLY
+    const [date, setDate] = useState(new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-'));
+    const [month, setMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
+
+    return (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
+            <div className="bg-white w-full max-w-sm rounded-xl shadow-2xl p-6 animate-scale-in">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-lg font-bold flex items-center gap-2"><Download size={20}/> CSV出力設定</h3>
+                    <button onClick={onClose}><X size={20} className="text-gray-400 hover:text-gray-600"/></button>
+                </div>
+                
+                <div className="flex bg-gray-100 p-1 rounded-lg mb-6">
+                    <button onClick={() => setMode('DAILY')} className={`flex-1 py-2 rounded-md text-sm font-bold transition-all ${mode === 'DAILY' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}>日報 (1日分)</button>
+                    <button onClick={() => setMode('MONTHLY')} className={`flex-1 py-2 rounded-md text-sm font-bold transition-all ${mode === 'MONTHLY' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}>月報 (1ヶ月分)</button>
+                </div>
+
+                <div className="space-y-4 mb-6">
+                    {mode === 'DAILY' ? (
+                        <div>
+                            <label className="block text-sm font-bold text-gray-700 mb-1">日付を選択</label>
+                            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full border p-2 rounded-lg" />
+                        </div>
+                    ) : (
+                        <div>
+                            <label className="block text-sm font-bold text-gray-700 mb-1">月を選択</label>
+                            <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-full border p-2 rounded-lg" />
+                        </div>
+                    )}
+                </div>
+
+                <button 
+                    onClick={() => mode === 'DAILY' ? onExportDaily(date) : onExportMonthly(month)}
+                    className="w-full py-3 bg-blue-600 text-white rounded-lg font-bold shadow-md hover:bg-blue-700 active:scale-95 transition-all flex justify-center items-center gap-2"
+                >
+                    <Download size={18}/> 出力する
+                </button>
+            </div>
+        </div>
+    );
+}
+
+// 6. DeviceHistoryModal
 function DeviceHistoryModal({ db, appId, device, onClose }) {
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(true);
