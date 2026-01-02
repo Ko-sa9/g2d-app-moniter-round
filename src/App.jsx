@@ -236,14 +236,13 @@ function App() {
                 setSelectedDevice(filteredDevices[currentIndex + 1]);
             } else {
                 setSelectedDevice(null);
-                alert('このリストの最後の機器です');
+                // alert 削除 (修正点)
             }
         } else if (action === 'PREV') {
             if (currentIndex > 0) {
                 setSelectedDevice(filteredDevices[currentIndex - 1]);
             } else {
-                // 先頭の場合は閉じないか、アラート出すか。ここではアラートなしで維持
-                alert('このリストの最初の機器です');
+                // 先頭の場合は維持 (alert 削除)
             }
         }
     } else {
@@ -353,6 +352,8 @@ function App() {
                             onSave={handleSaveRecord}
                             onDelete={handleDeleteRecord}
                             checker={currentStaff}
+                            isFirst={filteredDevices.length > 0 && filteredDevices[0].id === device.id} // 追加
+                            isLast={filteredDevices.length > 0 && filteredDevices[filteredDevices.length - 1].id === device.id} // 追加
                           />
                         ))}
                       </div>
@@ -370,6 +371,8 @@ function App() {
                             onSave={handleSaveRecord}
                             onDelete={handleDeleteRecord}
                             checker={currentStaff}
+                            isFirst={filteredDevices.length > 0 && filteredDevices[0].id === device.id} // 追加
+                            isLast={filteredDevices.length > 0 && filteredDevices[filteredDevices.length - 1].id === device.id} // 追加
                         />
                     ))}
                   </div>
@@ -422,7 +425,7 @@ function App() {
 // --- Sub Components ---
 
 // DeviceRow: 展開状態（isExpanded）に応じてインラインフォームを表示
-function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, checker }) {
+function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, checker, isFirst, isLast }) { // isFirst, isLast 追加
   const isChecked = !!record;
   const rowRef = useRef(null);
   
@@ -489,6 +492,8 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, che
                 onClose={onToggle}
                 onSave={onSave}
                 onDelete={onDelete}
+                isFirst={isFirst} // 追加
+                isLast={isLast}   // 追加
             />
         </div>
       )}
@@ -497,7 +502,7 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, che
 }
 
 // CheckInlineForm: モーダルの中身をインライン用に調整したコンポーネント
-function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDelete }) {
+function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDelete, isFirst, isLast }) { // isFirst, isLast 追加
   const [inUse, setInUse] = useState(initialData?.inUse || null);
   const [reception, setReception] = useState(initialData?.reception || 'GOOD');
   const [receptionReason, setReceptionReason] = useState(initialData?.receptionReason || 'A');
@@ -547,11 +552,15 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
   };
   
   const handleSaveAndNext = () => {
+    // 修正: 最後の要素なら何もしない
+    if (isLast) return;
     // 修正: inUseチェックを削除して次へ
     onSave(createRecord(), 'NEXT'); 
   };
 
   const handleSaveAndPrev = () => {
+    // 修正: 最初の要素なら何もしない
+    if (isFirst) return;
     // 修正: inUseチェックを削除して前へ
     onSave(createRecord(), 'PREV');
   };
@@ -616,8 +625,8 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
       {/* 修正: grid-cols-4 -> grid-cols-3 に変更し、ボタン幅を均等化 */}
       <div className="pt-2 grid grid-cols-3 gap-3">
         {/* 戻る */}
-        {/* 修正: disabled制御を削除 */}
-        <button onClick={handleSaveAndPrev} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-95`}>
+        {/* 修正: disabled制御を変更 */}
+        <button onClick={handleSaveAndPrev} disabled={isFirst} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all ${isFirst ? 'bg-gray-100 text-gray-300 cursor-not-allowed' : 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-95'}`}>
             <ArrowLeft size={24}/>
         </button>
 
@@ -634,8 +643,8 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
         </div>
         
         {/* 次へ (メイン) */}
-        {/* 修正: col-span-2 -> col-span-1 に変更して幅を均等化、disabled削除 */}
-        <button onClick={handleSaveAndNext} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all shadow-sm ${isSelectionRequired ? 'bg-blue-300 text-white' : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95'}`}>
+        {/* 修正: col-span-2 -> col-span-1 に変更して幅を均等化、disabled制御を変更 */}
+        <button onClick={handleSaveAndNext} disabled={isLast} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all shadow-sm ${isLast ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : (isSelectionRequired ? 'bg-blue-300 text-white' : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95')}`}>
             <ArrowRight size={24}/>
         </button>
       </div>
