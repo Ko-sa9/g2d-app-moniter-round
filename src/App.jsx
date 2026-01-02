@@ -4,7 +4,7 @@ import {
   Activity, Filter, MapPin, Monitor, Settings, User, Plus, Trash2, Edit2, 
   History, LogOut, FileText, ChevronDown, ChevronUp, ArrowRight, ArrowLeft,
   Server, Grid, Layers, Menu, BarChart2, Calendar, AlertOctagon, HelpCircle,
-  Cloud, Clock
+  Cloud, Clock, FastForward
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -43,7 +43,8 @@ function App() {
   const [records, setRecords] = useState({});
 
   const [selectedWard, setSelectedWard] = useState(null);
-  const [selectedDevice, setSelectedDevice] = useState(null);
+  // selectedDevice: 現在展開中（編集モード）のデバイスIDを保持
+  const [selectedDevice, setSelectedDevice] = useState(null); 
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showConfirmSave, setShowConfirmSave] = useState(false);
@@ -196,6 +197,53 @@ function App() {
     setShowConfirmSave(false);
   };
 
+  // デバイスの展開切り替え処理
+  const toggleDevice = (device) => {
+    if (selectedDevice && selectedDevice.id === device.id) {
+      setSelectedDevice(null); // 同じものをタップしたら閉じる
+    } else {
+      setSelectedDevice(device);
+    }
+  };
+
+  // 保存処理 (インラインフォームから呼ばれる)
+  const handleSaveRecord = async (record, isNext = false) => {
+    const deviceMaster = devices.find(d => d.id === record.deviceId);
+    if(!deviceMaster) return;
+
+    const docId = `${record.date}_${record.deviceId}`;
+    const recordWithSnapshot = { 
+        ...record, 
+        model: deviceMaster.model, 
+        monitorGroup: deviceMaster.monitorGroup, 
+        ward: deviceMaster.ward 
+    };
+    
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId), recordWithSnapshot);
+
+    if (isNext) {
+        // 次のデバイスを探す
+        const currentIndex = filteredDevices.findIndex(d => d.id === record.deviceId);
+        if (currentIndex >= 0 && currentIndex < filteredDevices.length - 1) {
+            setSelectedDevice(filteredDevices[currentIndex + 1]);
+        } else {
+            setSelectedDevice(null);
+            alert('このリストの最後の機器です');
+        }
+    } else {
+        setSelectedDevice(null);
+    }
+  };
+
+  const handleDeleteRecord = async (record) => {
+    if(confirm('この点検記録を取り消しますか？\nデータは削除され「未実施」に戻ります。')) {
+      const docId = `${record.date}_${record.deviceId}`;
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId));
+      setSelectedDevice(null); // 削除後は閉じる
+    }
+  };
+
+
   if (!user) return <div className="flex h-screen items-center justify-center">Loading...</div>;
 
   return (
@@ -274,14 +322,34 @@ function App() {
                       </div>
                       <div className="divide-y divide-gray-100">
                         {groupDevices.map(device => (
-                          <DeviceRow key={device.id} device={device} record={records[device.id]} onClick={() => setSelectedDevice(device)} />
+                          <DeviceRow 
+                            key={device.id} 
+                            device={device} 
+                            record={records[device.id]} 
+                            isExpanded={selectedDevice?.id === device.id}
+                            onToggle={() => toggleDevice(device)}
+                            onSave={handleSaveRecord}
+                            onDelete={handleDeleteRecord}
+                            checker={currentStaff}
+                          />
                         ))}
                       </div>
                     </div>
                   ))
                 ) : (
                   <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden divide-y divide-gray-100">
-                    {filteredDevices.map(device => <DeviceRow key={device.id} device={device} record={records[device.id]} onClick={() => setSelectedDevice(device)} />)}
+                    {filteredDevices.map(device => (
+                        <DeviceRow 
+                            key={device.id} 
+                            device={device} 
+                            record={records[device.id]} 
+                            isExpanded={selectedDevice?.id === device.id}
+                            onToggle={() => toggleDevice(device)}
+                            onSave={handleSaveRecord}
+                            onDelete={handleDeleteRecord}
+                            checker={currentStaff}
+                        />
+                    ))}
                   </div>
                 )}
                 {filteredDevices.length === 0 && <div className="text-center py-10 text-gray-400 text-sm">該当する機器が見つかりません</div>}
@@ -306,27 +374,7 @@ function App() {
         </div>
       )}
 
-      {/* Modals */}
-      {selectedDevice && (
-        <CheckModal 
-          device={selectedDevice} initialData={records[selectedDevice.id]} checker={currentStaff}
-          onClose={() => setSelectedDevice(null)}
-          onSave={async (record) => {
-            const docId = `${record.date}_${record.deviceId}`;
-            const recordWithSnapshot = { ...record, model: selectedDevice.model, monitorGroup: selectedDevice.monitorGroup, ward: selectedDevice.ward };
-            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId), recordWithSnapshot);
-            setSelectedDevice(null);
-          }}
-          onDelete={async (record) => {
-            if(confirm('この点検記録を取り消しますか？\nデータは削除され「未実施」に戻ります。')) {
-              const docId = `${record.date}_${record.deviceId}`;
-              await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId));
-              setSelectedDevice(null);
-            }
-          }}
-        />
-      )}
-
+      {/* モーダル表示は廃止しましたが、完了確認モーダルは残します */}
       {showConfirmSave && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
           <div className="bg-white w-full max-w-sm rounded-xl shadow-2xl p-6 animate-scale-in">
@@ -349,38 +397,75 @@ function App() {
 
 // --- Sub Components ---
 
-function DeviceRow({ device, record, onClick }) {
+// DeviceRow: 展開状態（isExpanded）に応じてインラインフォームを表示
+function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, checker }) {
   const isChecked = !!record;
+  const rowRef = useRef(null);
+  
+  // 展開されたときに自動でスクロールして見やすくする
+  useEffect(() => {
+    if (isExpanded && rowRef.current) {
+      setTimeout(() => {
+        rowRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+    }
+  }, [isExpanded]);
+
   let hasIssue = false;
   if (record) {
     if (record.inUse === 'YES' && record.reception === 'BAD') hasIssue = true;
     if (record.inUse === 'NO' && (record.isBroken === 'YES' || record.channelCheck === 'NG')) hasIssue = true;
   }
+
   return (
-    <div onClick={onClick} className={`p-4 flex justify-between items-center cursor-pointer transition-all active:bg-gray-50 ${isChecked && hasIssue ? 'bg-red-50' : ''} ${isChecked && !hasIssue ? 'bg-green-50' : ''}`}>
-      <div>
-        <div className="flex items-center gap-2">
-          <span className={`text-xl font-bold font-mono ${isChecked ? (hasIssue ? 'text-red-700' : 'text-green-700') : 'text-gray-800'}`}>ch: {device.id}</span>
-          {isChecked && !hasIssue && <CheckCircle size={18} className="text-green-600" />}
-          {hasIssue && <AlertTriangle size={18} className="text-red-500" />}
+    <div ref={rowRef} className={`transition-all ${isExpanded ? 'bg-blue-50/50 shadow-md ring-2 ring-blue-100 z-10 rounded-lg my-2' : ''}`}>
+      <div 
+        onClick={onToggle} 
+        className={`p-4 flex justify-between items-center cursor-pointer active:bg-gray-50 
+        ${isChecked && hasIssue ? 'bg-red-50' : ''} 
+        ${isChecked && !hasIssue ? 'bg-green-50' : ''}
+        ${isExpanded ? '!bg-transparent' : ''}
+        `}
+      >
+        <div>
+          <div className="flex items-center gap-2">
+            <span className={`text-xl font-bold font-mono ${isChecked ? (hasIssue ? 'text-red-700' : 'text-green-700') : 'text-gray-800'}`}>ch: {device.id}</span>
+            {isChecked && !hasIssue && <CheckCircle size={18} className="text-green-600" />}
+            {hasIssue && <AlertTriangle size={18} className="text-red-500" />}
+          </div>
+          <div className="text-xs text-gray-500 mt-1 ml-1">{device.model}</div>
         </div>
-        <div className="text-xs text-gray-500 mt-1 ml-1">{device.model}</div>
+        <div className="flex items-center text-gray-400">
+          {isChecked ? (
+            hasIssue 
+              ? <span className="text-xs font-bold text-red-700 mr-2 bg-red-100 px-2 py-1 rounded border border-red-200">要確認</span>
+              : <span className="text-xs font-bold text-green-700 mr-2 bg-green-100 px-2 py-1 rounded border border-green-200">点検済</span>
+          ) : (
+            <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded mr-2 border border-gray-200">未実施</span>
+          )}
+          {isExpanded ? <ChevronDown size={20} className="text-blue-500" /> : <ChevronRight size={20} />}
+        </div>
       </div>
-      <div className="flex items-center text-gray-400">
-        {isChecked ? (
-          hasIssue 
-            ? <span className="text-xs font-bold text-red-700 mr-2 bg-red-100 px-2 py-1 rounded border border-red-200">要確認</span>
-            : <span className="text-xs font-bold text-green-700 mr-2 bg-green-100 px-2 py-1 rounded border border-green-200">点検済</span>
-        ) : (
-          <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded mr-2 border border-gray-200">未実施</span>
-        )}
-        <ChevronRight size={20} />
-      </div>
+
+      {/* インライン入力フォームエリア */}
+      {isExpanded && (
+        <div className="border-t border-blue-100 p-4 bg-white rounded-b-lg animate-slide-up">
+            <CheckInlineForm 
+                device={device}
+                initialData={record}
+                checker={checker}
+                onClose={onToggle}
+                onSave={onSave}
+                onDelete={onDelete}
+            />
+        </div>
+      )}
     </div>
   );
 }
 
-function CheckModal({ device, initialData, checker, onClose, onSave, onDelete }) {
+// CheckInlineForm: モーダルの中身をインライン用に調整したコンポーネント
+function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDelete }) {
   const [inUse, setInUse] = useState(initialData?.inUse || null);
   const [reception, setReception] = useState(initialData?.reception || 'GOOD');
   const [receptionReason, setReceptionReason] = useState(initialData?.receptionReason || 'A');
@@ -400,9 +485,8 @@ function CheckModal({ device, initialData, checker, onClose, onSave, onDelete })
     }
   }, [inUse]);
 
-  const handleSave = () => {
-    if (inUse === null) { alert('「①使用中ですか？」のどちらかを選択してください'); return; }
-    onSave({
+  const createRecord = () => {
+    return {
       deviceId: device.id, ward: device.ward,
       date: new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-'),
       timestamp: new Date().toLocaleString('ja-JP'), checker: checker || '',
@@ -411,81 +495,89 @@ function CheckModal({ device, initialData, checker, onClose, onSave, onDelete })
       receptionNote: (inUse === 'YES' && reception === 'BAD' && receptionReason === 'D') ? receptionNote : null,
       isBroken: inUse === 'NO' ? isBroken : '-', channelCheck: inUse === 'NO' ? channelCheck : '-',
       note
-    });
+    };
+  };
+
+  const handleSave = () => {
+    if (inUse === null) { alert('「①使用中ですか？」のどちらかを選択してください'); return; }
+    onSave(createRecord(), false); // false = 次へ進まない
+  };
+
+  const handleSaveAndNext = () => {
+    if (inUse === null) { alert('「①使用中ですか？」のどちらかを選択してください'); return; }
+    onSave(createRecord(), true); // true = 次へ進む
   };
   
   const isSelectionRequired = inUse === null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
-      <div className="bg-white w-full max-w-md rounded-xl shadow-2xl overflow-hidden animate-slide-up flex flex-col max-h-[90vh]">
-        <div className="bg-gray-50 p-4 border-b flex justify-between items-center shrink-0">
-          <div>
-            <div className="text-xs text-gray-500 flex items-center gap-1 mb-1"><MapPin size={12}/> {device.ward} <span className="text-gray-300">|</span> <Monitor size={12}/> {device.monitorGroup}</div>
-            <div className="text-3xl font-bold text-gray-800 font-mono tracking-tight">ch: {device.id}</div>
-            <div className="text-xs text-blue-600 font-bold mt-1">点検者: {checker || '(未選択)'}</div>
-          </div>
-          <button onClick={onClose} className="p-2 bg-gray-200 rounded-full hover:bg-gray-300 transition-colors"><X size={20}/></button>
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <label className="text-sm font-bold text-gray-700 block flex items-center gap-2"><span className="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span> 使用中ですか？</label>
+        <div className="grid grid-cols-2 gap-3">
+          <SelectionButton label="使用中" selected={inUse === 'YES'} onClick={() => setInUse('YES')} color="blue" />
+          <SelectionButton label="未使用" selected={inUse === 'NO'} onClick={() => setInUse('NO')} color="gray" />
         </div>
-        <div className="p-5 space-y-6 overflow-y-auto flex-1">
-          <div className="space-y-2">
-            <label className="text-sm font-bold text-gray-700 block flex items-center gap-2"><span className="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span> 使用中ですか？</label>
-            <div className="grid grid-cols-2 gap-3">
-              <SelectionButton label="使用中" selected={inUse === 'YES'} onClick={() => setInUse('YES')} color="blue" />
-              <SelectionButton label="未使用" selected={inUse === 'NO'} onClick={() => setInUse('NO')} color="gray" />
+      </div>
+
+      <div className={`space-y-2 transition-all ${inUse !== 'YES' ? 'hidden' : ''}`}>
+        <label className="text-sm font-bold text-gray-700 block flex items-center gap-2"><span className="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs">2</span> 受信状態</label>
+        <div className="grid grid-cols-2 gap-3">
+          <SelectionButton label="良好" selected={reception === 'GOOD'} onClick={() => setReception('GOOD')} color="green" />
+          <SelectionButton label="不良" selected={reception === 'BAD'} onClick={() => setReception('BAD')} color="red" />
+        </div>
+        {reception === 'BAD' && (
+          <div className="mt-3 bg-red-50 p-3 rounded-lg border border-red-100 space-y-2 animate-fade-in">
+            <p className="text-xs font-bold text-red-700">不良の理由を選択:</p>
+            <div className="grid grid-cols-1 gap-2">
+              {[{ val: 'A', label: 'A: 電波切れ' }, { val: 'B', label: 'B: 電極確認' }, { val: 'C', label: 'C: 一時退床中' }, { val: 'D', label: 'D: その他' }].map(opt => (
+                <label key={opt.val} className="flex items-center gap-2 p-2 bg-white rounded border cursor-pointer hover:bg-gray-50">
+                  <input type="radio" name="reason" checked={receptionReason === opt.val} onChange={() => setReceptionReason(opt.val)} className="text-red-600 focus:ring-red-500" />
+                  <span className="text-sm text-gray-700">{opt.label}</span>
+                </label>
+              ))}
             </div>
+            {receptionReason === 'D' && <input type="text" placeholder="理由を記入..." value={receptionNote} onChange={(e) => setReceptionNote(e.target.value)} className="w-full p-2 text-sm border rounded focus:outline-none focus:ring-2 focus:ring-red-300" />}
           </div>
-          <div className={`space-y-2 transition-all ${inUse !== 'YES' ? 'opacity-30 grayscale pointer-events-none' : ''}`}>
-            <label className="text-sm font-bold text-gray-700 block flex items-center gap-2"><span className="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs">2</span> 受信状態</label>
-            <div className="grid grid-cols-2 gap-3">
-              <SelectionButton label="良好" selected={reception === 'GOOD'} onClick={() => setReception('GOOD')} color="green" />
-              <SelectionButton label="不良" selected={reception === 'BAD'} onClick={() => setReception('BAD')} color="red" />
-            </div>
-            {inUse === 'YES' && reception === 'BAD' && (
-              <div className="mt-3 bg-red-50 p-3 rounded-lg border border-red-100 space-y-2 animate-fade-in">
-                <p className="text-xs font-bold text-red-700">不良の理由を選択:</p>
-                <div className="grid grid-cols-1 gap-2">
-                  {[{ val: 'A', label: 'A: 電波切れ' }, { val: 'B', label: 'B: 電極確認' }, { val: 'C', label: 'C: 一時退床中' }, { val: 'D', label: 'D: その他' }].map(opt => (
-                    <label key={opt.val} className="flex items-center gap-2 p-2 bg-white rounded border cursor-pointer hover:bg-gray-50">
-                      <input type="radio" name="reason" checked={receptionReason === opt.val} onChange={() => setReceptionReason(opt.val)} className="text-red-600 focus:ring-red-500" />
-                      <span className="text-sm text-gray-700">{opt.label}</span>
-                    </label>
-                  ))}
-                </div>
-                {receptionReason === 'D' && <input type="text" placeholder="理由を記入..." value={receptionNote} onChange={(e) => setReceptionNote(e.target.value)} className="w-full p-2 text-sm border rounded focus:outline-none focus:ring-2 focus:ring-red-300" />}
-              </div>
+        )}
+      </div>
+
+      <div className={`space-y-6 transition-all ${inUse !== 'NO' ? 'hidden' : ''}`}>
+        <div className="space-y-2">
+          <label className="text-sm font-bold text-gray-700 block flex items-center gap-2"><span className="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs">3</span> 本体の破損</label>
+          <div className="grid grid-cols-2 gap-3">
+            <SelectionButton label="なし" selected={isBroken === 'NO'} onClick={() => setIsBroken('NO')} color="green" />
+            <SelectionButton label="破損あり" selected={isBroken === 'YES'} onClick={() => setIsBroken('YES')} color="red" icon={React.createElement(AlertTriangle, {size:16})} />
+          </div>
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-bold text-gray-700 block flex items-center gap-2"><span className="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs">4</span> ch設定確認</label>
+          <div className="grid grid-cols-2 gap-3">
+            <SelectionButton label="OK (合致)" selected={channelCheck === 'OK'} onClick={() => setChannelCheck('OK')} color="green" />
+            <SelectionButton label="NG (不一致)" selected={channelCheck === 'NG'} onClick={() => setChannelCheck('NG')} color="red" />
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2 pt-2 border-t border-dashed">
+        <label className="text-sm font-bold text-gray-700 block">備考</label>
+        <textarea className="w-full p-3 border rounded-lg text-sm focus:ring-2 focus:ring-blue-300 focus:border-blue-300 focus:outline-none transition-shadow bg-gray-50" rows={2} placeholder="特記事項があれば入力してください..." value={note} onChange={(e) => setNote(e.target.value)} />
+      </div>
+
+      <div className="pt-2 flex flex-col gap-3">
+        <button onClick={handleSaveAndNext} disabled={isSelectionRequired} className={`w-full text-white font-bold py-4 rounded-xl shadow-md transition-all flex justify-center items-center gap-2 ${isSelectionRequired ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 hover:shadow-lg active:scale-[0.98]'}`}>
+            <span className="flex items-center gap-1"><Save size={20} /> 保存して次へ</span> <FastForward size={16} className="opacity-70"/>
+        </button>
+        
+        <div className="flex gap-3">
+            {initialData && (
+                <button onClick={() => onDelete(initialData)} className="flex-1 bg-red-50 text-red-600 font-bold py-3 rounded-lg border border-red-200 shadow-sm hover:bg-red-100 transition-all flex justify-center items-center gap-1 active:scale-95 text-xs sm:text-sm">
+                <Trash2 size={16} /> 取消
+                </button>
             )}
-          </div>
-          <hr className="border-gray-100" />
-          <div className={`space-y-6 transition-all ${inUse !== 'NO' ? 'opacity-30 grayscale pointer-events-none' : ''}`}>
-            <div className="space-y-2">
-              <label className="text-sm font-bold text-gray-700 block flex items-center gap-2"><span className="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs">3</span> 本体の破損</label>
-              <div className="grid grid-cols-2 gap-3">
-                <SelectionButton label="なし" selected={isBroken === 'NO'} onClick={() => setIsBroken('NO')} color="green" />
-                <SelectionButton label="破損あり" selected={isBroken === 'YES'} onClick={() => setIsBroken('YES')} color="red" icon={React.createElement(AlertTriangle, {size:16})} />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-bold text-gray-700 block flex items-center gap-2"><span className="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs">4</span> ch設定確認</label>
-              <div className="grid grid-cols-2 gap-3">
-                <SelectionButton label="OK (合致)" selected={channelCheck === 'OK'} onClick={() => setChannelCheck('OK')} color="green" />
-                <SelectionButton label="NG (不一致)" selected={channelCheck === 'NG'} onClick={() => setChannelCheck('NG')} color="red" />
-              </div>
-            </div>
-          </div>
-          <div className="space-y-2 pt-2 border-t border-dashed">
-            <label className="text-sm font-bold text-gray-700 block">備考</label>
-            <textarea className="w-full p-3 border rounded-lg text-sm focus:ring-2 focus:ring-blue-300 focus:border-blue-300 focus:outline-none transition-shadow bg-gray-50" rows={2} placeholder="特記事項があれば入力してください..." value={note} onChange={(e) => setNote(e.target.value)} />
-          </div>
-        </div>
-        <div className="p-4 border-t bg-gray-50 shrink-0 safe-area-bottom flex gap-3">
-          {initialData && (
-            <button onClick={() => onDelete(initialData)} className="flex-[0.5] bg-red-50 text-red-600 font-bold py-3.5 rounded-xl border border-red-200 shadow-sm hover:bg-red-100 transition-all flex justify-center items-center gap-1 active:scale-95 text-xs sm:text-sm">
-              <Trash2 size={18} /> <span className="hidden sm:inline">記録取消</span><span className="sm:hidden">取消</span>
+            <button onClick={handleSave} disabled={isSelectionRequired} className={`flex-[2] text-gray-600 font-bold py-3 rounded-lg border shadow-sm transition-all flex justify-center items-center gap-2 ${isSelectionRequired ? 'bg-gray-100 cursor-not-allowed' : 'bg-white hover:bg-gray-50'}`}>
+                <CheckCircle size={16} /> 保存して閉じる
             </button>
-          )}
-          <button onClick={handleSave} disabled={isSelectionRequired} className={`flex-1 text-white font-bold py-3.5 rounded-xl shadow-md transition-all flex justify-center items-center gap-2 ${isSelectionRequired ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 hover:shadow-lg active:scale-[0.98]'}`}>
-            <Save size={20} /> 点検結果を保存
-          </button>
         </div>
       </div>
     </div>
