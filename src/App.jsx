@@ -743,6 +743,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
 
   // Ward DnD State
   const [draggedWard, setDraggedWard] = useState(null);
+  const touchWardRef = useRef(null); // 病棟タッチ用Ref
 
   const transmitterModelsList = useMemo(() => models.filter(m => m.type === 'TRANSMITTER'), [models]);
   const monitorModelsList = useMemo(() => models.filter(m => m.type === 'MONITOR'), [models]);
@@ -926,6 +927,24 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     }
     touchItemRef.current = null;
   };
+
+  // 病棟タッチ操作ハンドラ
+  const handleWardTouchStart = (e, ward) => {
+      touchWardRef.current = ward;
+  };
+  
+  const handleWardTouchEnd = async (e) => {
+      const changedTouch = e.changedTouches[0];
+      const elem = document.elementFromPoint(changedTouch.clientX, changedTouch.clientY);
+      const targetRow = elem?.closest('[data-ward-name]');
+      if (targetRow && touchWardRef.current) {
+          const targetWardName = targetRow.getAttribute('data-ward-name');
+          if (targetWardName && targetWardName !== touchWardRef.current) {
+              await handleWardDrop({ preventDefault: () => {} }, targetWardName);
+          }
+      }
+      touchWardRef.current = null;
+  };
   
   const devicesByWardAndMonitor = useMemo(() => {
     const wardGroups = {};
@@ -1084,15 +1103,28 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
               onDragStart={(e) => handleWardDragStart(e, ward)}
               onDragOver={handleDragOver}
               onDrop={(e) => handleWardDrop(e, ward)}
+              onTouchStart={(e) => handleWardTouchStart(e, ward)} 
+              onTouchMove={handleTouchMove} 
+              onTouchEnd={handleWardTouchEnd}
+              data-ward-name={ward}
             >
-              <div className="w-full p-3 bg-gray-50 flex justify-between items-center hover:bg-gray-100 transition-colors cursor-move relative group">
-                {/* ドラッグハンドル（視覚的） */}
-                <div className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity"><Menu size={14}/></div>
+              <div 
+                className="w-full p-3 bg-gray-50 flex justify-between items-center hover:bg-gray-100 transition-colors cursor-move"
+                onClick={() => toggleWard(ward)}
+              >
+                <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 pointer-events-none">
+                        <Menu size={16} className="text-gray-400"/>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <MapPin size={18} className="text-blue-500"/>
+                        <span className="font-bold text-gray-800">{ward}</span>
+                    </div>
+                </div>
                 
-                <button onClick={(e) => { e.stopPropagation(); toggleWard(ward); }} className="flex-1 flex justify-between items-center pl-6">
-                  <div className="flex items-center gap-2"><MapPin size={18} className="text-blue-500"/><span className="font-bold text-gray-800">{ward}</span></div>
-                  {expandedWards[ward] ? <ChevronUp size={20} className="text-gray-400"/> : <ChevronDown size={20} className="text-gray-400"/>}
-                </button>
+                <div className="text-gray-400">
+                    {expandedWards[ward] ? <ChevronUp size={20}/> : <ChevronDown size={20}/>}
+                </div>
               </div>
               
               {expandedWards[ward] && (
