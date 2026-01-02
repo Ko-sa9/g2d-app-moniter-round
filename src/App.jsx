@@ -48,7 +48,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showConfirmSave, setShowConfirmSave] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
+  // const [searchTerm, setSearchTerm] = useState(''); // 削除: チェック時の検索機能は削除
   
   // 時計用のstate
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -138,25 +138,27 @@ function App() {
   const filteredDevices = useMemo(() => {
     let list = devices;
     if (selectedWard) list = list.filter(d => d.ward === selectedWard);
-    if (searchTerm) list = list.filter(d => d.id.includes(searchTerm) || d.model.includes(searchTerm) || d.monitorGroup.includes(searchTerm));
+    // 検索機能削除に伴い、ここでのフィルタリングも削除
+    // if (searchTerm) list = list.filter(d => d.id.includes(searchTerm) || d.model.includes(searchTerm) || d.monitorGroup.includes(searchTerm));
     return list;
-  }, [selectedWard, searchTerm, devices]);
+  }, [selectedWard, devices]); // searchTerm removed form dependency
 
   const groupedDevices = useMemo(() => {
-    if (!selectedWard || searchTerm) return null;
+    if (!selectedWard) return null; // searchTerm check removed
     const groups = {};
     filteredDevices.forEach(device => {
       if (!groups[device.monitorGroup]) groups[device.monitorGroup] = [];
       groups[device.monitorGroup].push(device);
     });
     return groups;
-  }, [selectedWard, searchTerm, filteredDevices]);
+  }, [selectedWard, filteredDevices]);
 
-  const progress = useMemo(() => {
-    if (filteredDevices.length === 0) return 0;
-    const checkedCount = filteredDevices.filter(d => records[d.id]).length;
-    return Math.round((checkedCount / filteredDevices.length) * 100);
-  }, [filteredDevices, records]);
+  // 全体の進捗率 (病棟選択画面用)
+  const totalProgress = useMemo(() => {
+    if (devices.length === 0) return 0;
+    const checkedCount = Object.keys(records).length;
+    return Math.round((checkedCount / devices.length) * 100);
+  }, [devices, records]);
 
   // CSV出力
   const handleDownloadCSV = (targetRecords, fileNameDate) => {
@@ -284,7 +286,22 @@ function App() {
         <div className="max-w-3xl mx-auto w-full space-y-6">
           {!selectedWard ? (
             <div className="space-y-4 animate-fade-in">
-              <div className="flex items-center gap-2 mb-2"><MapPin size={18} className="text-blue-600" /><h2 className="text-md font-bold text-gray-700">病棟を選択してください</h2></div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2"><MapPin size={18} className="text-blue-600" /><h2 className="text-md font-bold text-gray-700">病棟を選択してください</h2></div>
+              </div>
+              
+              {/* 全体の進捗率表示 (病棟選択画面のみに移動) */}
+              <div className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 mb-4">
+                <div className="flex justify-between items-end mb-1">
+                  <span className="text-xs font-bold text-gray-500">本日の点検進捗 (全体)</span>
+                  <span className="font-mono text-lg font-bold text-blue-600">{totalProgress}%</span>
+                </div>
+                <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
+                  <div className="h-full bg-green-500 transition-all duration-500 ease-out" style={{ width: `${totalProgress}%` }} />
+                </div>
+                <div className="text-right text-xs text-gray-400 mt-1">{Object.keys(records).length} / {devices.length} 台</div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 {wards.map(ward => (
                   <button key={ward} onClick={() => setSelectedWard(ward)} className="p-4 bg-white rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all active:scale-95 text-left group">
@@ -300,21 +317,11 @@ function App() {
                 <button onClick={() => setSelectedWard(null)} className="text-sm text-blue-600 hover:underline flex items-center gap-1 pl-1"><ChevronRight size={16} className="rotate-180" /> 病棟選択に戻る</button>
                 <div className="text-sm font-bold bg-white px-3 py-1 rounded-full shadow-sm border text-gray-600">{selectedWard}</div>
               </div>
-              {/* Search & Progress */}
-              <div className="bg-white p-3 rounded-lg shadow-sm space-y-3 sticky top-0 z-0 border border-gray-100">
-                <div className="relative">
-                  <Search className="absolute left-3 top-2.5 text-gray-400" size={18} />
-                  <input type="text" placeholder="ch または モニタ番号で検索" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 bg-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-300 text-sm transition-all" />
-                  {searchTerm && <button onClick={() => setSearchTerm('')} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"><X size={18}/></button>}
-                </div>
-                <div className="flex items-center gap-2 text-xs text-gray-500">
-                  <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden"><div className="h-full bg-green-500 transition-all duration-500 ease-out" style={{ width: `${progress}%` }} /></div>
-                  <span className="font-mono">{progress}%</span>
-                </div>
-              </div>
+              {/* Search & Progress は削除されました */}
+              
               {/* Device List */}
               <div className="space-y-6 pb-24">
-                {groupedDevices && !searchTerm ? (
+                {groupedDevices ? (
                   Object.entries(groupedDevices).map(([groupName, groupDevices]) => (
                     <div key={groupName} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                       <div className="bg-gray-100 px-4 py-2 border-b border-gray-200 flex items-center gap-2">
@@ -359,9 +366,9 @@ function App() {
         </div>
       </main>
       
-      {/* Footer */}
-      {Object.keys(records).length > 0 && (
-        <div className="bg-white p-4 border-t sticky bottom-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] safe-area-bottom z-10">
+      {/* Footer: 病棟選択画面(!selectedWard) かつ レコードが存在する場合のみ表示に変更 */}
+      {Object.keys(records).length > 0 && !selectedWard && (
+        <div className="bg-white p-4 border-t sticky bottom-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] safe-area-bottom z-10 animate-slide-up">
           <div className="max-w-3xl mx-auto flex justify-between items-center">
             <div className="flex flex-col">
               <div className="text-xs text-gray-500"><span className="font-bold text-gray-800 text-base mr-1">{Object.keys(records).length}</span>件 記録済</div>
@@ -1162,6 +1169,7 @@ function HistoryModal({ db, appId, onClose, onDownloadCSV }) {
   const [historyRecords, setHistoryRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterMode, setFilterMode] = useState('ALL');
+  const [searchTerm, setSearchTerm] = useState(''); // Added Search state
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -1177,10 +1185,24 @@ function HistoryModal({ db, appId, onClose, onDownloadCSV }) {
 
   const filteredRecords = useMemo(() => {
     return historyRecords.filter(r => {
-      if (filterMode === 'ISSUES') return r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG';
+      if (filterMode === 'ISSUES') {
+         if (!(r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG')) return false;
+      }
+      
+      // Search Logic
+      if (searchTerm) {
+          const lower = searchTerm.toLowerCase();
+          const match = 
+            r.deviceId.toLowerCase().includes(lower) || 
+            (r.ward && r.ward.toLowerCase().includes(lower)) ||
+            (r.monitorGroup && r.monitorGroup.toLowerCase().includes(lower)) ||
+            (r.checker && r.checker.toLowerCase().includes(lower)) ||
+            (r.note && r.note.toLowerCase().includes(lower));
+          if (!match) return false;
+      }
       return true;
     });
-  }, [historyRecords, filterMode]);
+  }, [historyRecords, filterMode, searchTerm]);
 
   const stats = useMemo(() => {
     const total = historyRecords.length;
@@ -1206,17 +1228,33 @@ function HistoryModal({ db, appId, onClose, onDownloadCSV }) {
           <h2 className="text-lg font-bold flex items-center gap-2"><BarChart2 size={20}/> 履歴・分析ダッシュボード</h2>
           <button onClick={onClose}><X size={20}/></button>
         </div>
-        <div className="p-4 border-b bg-gray-50 flex flex-wrap gap-4 items-center justify-between">
-          <div className="flex bg-white rounded-lg border p-1 shadow-sm">
-            <button onClick={() => setFilterMode('ALL')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${filterMode === 'ALL' ? 'bg-blue-100 text-blue-800' : 'text-gray-500 hover:bg-gray-100'}`}>全て表示</button>
-            <button onClick={() => setFilterMode('ISSUES')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-1 ${filterMode === 'ISSUES' ? 'bg-red-100 text-red-800' : 'text-gray-500 hover:bg-gray-100'}`}><AlertTriangle size={14}/> 不具合/故障のみ</button>
-          </div>
-          {stats && (
-            <div className="flex gap-4 text-sm">
+        <div className="p-4 border-b bg-gray-50 flex flex-col gap-4">
+           {/* Top Stats */}
+           {stats && (
+            <div className="flex gap-4 text-sm justify-end">
               <div className="bg-blue-50 px-3 py-1 rounded border border-blue-200"><span className="text-gray-500 text-xs block">稼働率</span><span className="font-bold text-lg text-blue-700">{stats.utilization}%</span></div>
               <div className="bg-red-50 px-3 py-1 rounded border border-red-200"><span className="text-gray-500 text-xs block">不具合件数</span><span className="font-bold text-lg text-red-700">{stats.issueCount}件</span></div>
             </div>
           )}
+          
+          <div className="flex flex-wrap gap-4 items-center justify-between">
+            <div className="flex bg-white rounded-lg border p-1 shadow-sm">
+                <button onClick={() => setFilterMode('ALL')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${filterMode === 'ALL' ? 'bg-blue-100 text-blue-800' : 'text-gray-500 hover:bg-gray-100'}`}>全て表示</button>
+                <button onClick={() => setFilterMode('ISSUES')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-1 ${filterMode === 'ISSUES' ? 'bg-red-100 text-red-800' : 'text-gray-500 hover:bg-gray-100'}`}><AlertTriangle size={14}/> 不具合/故障のみ</button>
+            </div>
+            {/* Added Search Bar */}
+            <div className="relative flex-1 max-w-xs">
+                <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
+                <input 
+                    type="text" 
+                    placeholder="履歴を検索 (ch, 病棟, 名前...)" 
+                    value={searchTerm} 
+                    onChange={(e) => setSearchTerm(e.target.value)} 
+                    className="w-full pl-9 pr-4 py-2 bg-white border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-300 text-sm" 
+                />
+                 {searchTerm && <button onClick={() => setSearchTerm('')} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"><X size={16}/></button>}
+            </div>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto p-4 bg-gray-100">
           {loading ? <div className="text-center p-10 text-gray-500">データを読み込んでいます...</div> : (
