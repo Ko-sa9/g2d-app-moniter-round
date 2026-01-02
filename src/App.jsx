@@ -619,7 +619,7 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
         
         {/* 次へ (メイン) */}
         <button onClick={handleSaveAndNext} disabled={isSelectionRequired} className={`col-span-2 py-4 rounded-xl flex justify-center items-center transition-all shadow-sm ${isSelectionRequired ? 'bg-gray-200 text-gray-400' : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95'}`}>
-            <ArrowRight size={28}/>
+            <ArrowRight size={24}/>
         </button>
       </div>
     </div>
