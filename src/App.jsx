@@ -39,6 +39,7 @@ function App() {
   const [devices, setDevices] = useState([]);
   const [staffList, setStaffList] = useState([]);
   const [transmitterModels, setTransmitterModels] = useState([]);
+  const [wardList, setWardList] = useState([]); // 病棟マスタ（順序保持用）
   const [records, setRecords] = useState({});
 
   const [selectedWard, setSelectedWard] = useState(null);
@@ -75,24 +76,31 @@ function App() {
   useEffect(() => {
     if (!user) return;
     
-    // 1. Devices (初期化ロジックを削除)
+    // 1. Devices
     const unsubDevices = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'devices'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999) || a.id.localeCompare(b.id));
       setDevices(list);
     }, (error) => console.error("Device sync error", error));
 
-    // 2. Staff (初期化ロジックを削除)
+    // 2. Staff
     const unsubStaff = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'staff'), (snapshot) => {
       setStaffList(snapshot.docs.map(d => d.data()));
     }, (error) => console.error("Staff sync error", error));
 
-    // 3. Models (初期化ロジックを削除)
+    // 3. Models
     const unsubModels = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'transmitter_models'), (snapshot) => {
       setTransmitterModels(snapshot.docs.map(d => d.data()));
     }, (error) => console.error("Models sync error", error));
 
-    // 4. Checks (変更なし)
+    // 4. Wards (病棟マスタ・順序)
+    const unsubWards = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'wards'), (snapshot) => {
+      const list = snapshot.docs.map(d => d.data());
+      list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
+      setWardList(list);
+    }, (error) => console.error("Wards sync error", error));
+
+    // 5. Checks
     const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'), where('date', '==', today));
     const unsubChecks = onSnapshot(q, (snapshot) => {
       const recs = {};
@@ -100,20 +108,31 @@ function App() {
       setRecords(recs);
     }, (error) => console.error("Checks sync error", error));
 
-    return () => { unsubDevices(); unsubStaff(); unsubModels(); unsubChecks(); };
+    return () => { unsubDevices(); unsubStaff(); unsubModels(); unsubWards(); unsubChecks(); };
   }, [user]);
   
   // --- Helpers ---
   const wards = useMemo(() => {
     const list = Array.from(new Set(devices.map(d => d.ward)));
-    const order = ['3A病棟', '4F病棟', '2F病棟', '3F透析室', '君津1FHD', '坂田HD'];
+    
+    // DBのwardListがある場合はそのsortOrderを優先、なければ従来のハードコード順
     return list.sort((a, b) => {
-      const indexA = order.indexOf(a);
-      const indexB = order.indexOf(b);
+      const wa = wardList.find(w => w.name === a);
+      const wb = wardList.find(w => w.name === b);
+      
+      const orderA = wa ? (wa.sortOrder ?? 9999) : 9999;
+      const orderB = wb ? (wb.sortOrder ?? 9999) : 9999;
+      
+      if (orderA !== orderB) return orderA - orderB;
+
+      // Fallback (DB未登録時のデフォルト順)
+      const defaultOrder = ['3A病棟', '4F病棟', '2F病棟', '3F透析室', '君津1FHD', '坂田HD'];
+      const indexA = defaultOrder.indexOf(a);
+      const indexB = defaultOrder.indexOf(b);
       if (indexA !== -1 && indexB !== -1) return indexA - indexB;
       return a.localeCompare(b);
     });
-  }, [devices]);
+  }, [devices, wardList]);
 
   const filteredDevices = useMemo(() => {
     let list = devices;
@@ -322,7 +341,7 @@ function App() {
         </div>
       )}
 
-      {showSettings && <SettingsModal devices={devices} staffList={staffList} transmitterModels={transmitterModels} onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsModal devices={devices} staffList={staffList} transmitterModels={transmitterModels} wardList={wardList} onClose={() => setShowSettings(false)} />}
       {showHistory && <HistoryModal db={db} appId={appId} onClose={() => setShowHistory(false)} onDownloadCSV={handleDownloadCSV} />}
     </div>
   );
@@ -496,7 +515,7 @@ function SelectionButton({ label, selected, onClick, color, icon }) {
 // --------------------------------------------------------------------------------------
 // SettingsModal (Complete)
 // --------------------------------------------------------------------------------------
-function SettingsModal({ devices, staffList, transmitterModels, onClose }) {
+function SettingsModal({ devices, staffList, transmitterModels, wardList, onClose }) {
   const [activeTab, setActiveTab] = useState('DEVICE');
   
   const handleSaveDevice = async (device) => {
@@ -536,7 +555,7 @@ function SettingsModal({ devices, staffList, transmitterModels, onClose }) {
 
         <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
           {activeTab === 'DEVICE' ? (
-            <DeviceMasterEditor list={devices} models={transmitterModels} onSave={handleSaveDevice} onDelete={handleDeleteDevice} />
+            <DeviceMasterEditor list={devices} models={transmitterModels} wardList={wardList} onSave={handleSaveDevice} onDelete={handleDeleteDevice} />
           ) : activeTab === 'STAFF' ? (
             <StaffMasterEditor list={staffList} onSave={handleSaveStaff} onDelete={handleDeleteStaff} />
           ) : (
@@ -549,7 +568,7 @@ function SettingsModal({ devices, staffList, transmitterModels, onClose }) {
 }
 
 // DeviceMasterEditor (With DnD, Monitor Edit, Bulk Add)
-function DeviceMasterEditor({ list, models, onSave, onDelete }) {
+function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
   const [addMode, setAddMode] = useState(null);
   const [addStep, setAddStep] = useState(1);
   const [newDeviceBase, setNewDeviceBase] = useState({ ward: '', monitorGroup: '' });
@@ -563,6 +582,9 @@ function DeviceMasterEditor({ list, models, onSave, onDelete }) {
   const [editingMonitor, setEditingMonitor] = useState(null);
   const [draggedItem, setDraggedItem] = useState(null);
   const [expandedWards, setExpandedWards] = useState({});
+
+  // Ward DnD State
+  const [draggedWard, setDraggedWard] = useState(null);
 
   const transmitterModelsList = useMemo(() => models.filter(m => m.type === 'TRANSMITTER'), [models]);
   const monitorModelsList = useMemo(() => models.filter(m => m.type === 'MONITOR'), [models]);
@@ -664,8 +686,19 @@ function DeviceMasterEditor({ list, models, onSave, onDelete }) {
     setEditingMonitor(null);
   };
 
-  const handleDragStart = (e, item) => { setDraggedItem(item); if ('dataTransfer' in e) e.dataTransfer.effectAllowed = 'move'; };
-  const handleDragOver = (e) => e.preventDefault();
+  // --- Device DnD Handlers ---
+  const handleDragStart = (e, item) => { 
+    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+      e.preventDefault();
+      return;
+    }
+    setDraggedItem(item); 
+    if ('dataTransfer' in e) e.dataTransfer.effectAllowed = 'move'; 
+  };
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
   const handleDrop = async (e, targetItem) => {
     e.preventDefault();
     if (!draggedItem || draggedItem.id === targetItem.id) return;
@@ -678,6 +711,47 @@ function DeviceMasterEditor({ list, models, onSave, onDelete }) {
     await batch.commit();
     setDraggedItem(null);
   };
+
+  // --- Ward DnD Handlers ---
+  const handleWardDragStart = (e, ward) => {
+    // ボタン等でのドラッグ開始を防止
+    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+      // ただし、ドラッグハンドルの場合は許可するなどの制御が必要だが、
+      // ここではヘッダー全体をドラッグ可能とし、展開ボタン等は stopPropagation する
+    }
+    setDraggedWard(ward);
+    if ('dataTransfer' in e) e.dataTransfer.effectAllowed = 'move';
+  };
+  
+  const handleWardDrop = async (e, targetWardName) => {
+    e.preventDefault();
+    if (!draggedWard || draggedWard === targetWardName) return;
+
+    // 現在の表示順（ソート済み）を取得
+    const currentOrder = sortedWards;
+    const fromIndex = currentOrder.indexOf(draggedWard);
+    const toIndex = currentOrder.indexOf(targetWardName);
+    
+    if (fromIndex === -1 || toIndex === -1) return;
+
+    // 配列を並び替え
+    const newOrder = [...currentOrder];
+    newOrder.splice(fromIndex, 1);
+    newOrder.splice(toIndex, 0, draggedWard);
+
+    // Firestoreに保存 (全病棟の順序を更新)
+    const batch = writeBatch(db);
+    newOrder.forEach((wardName, index) => {
+      batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'wards', wardName), {
+        name: wardName,
+        sortOrder: index + 1
+      });
+    });
+    
+    await batch.commit();
+    setDraggedWard(null);
+  };
+  
   const touchItemRef = useRef(null);
   const handleTouchStart = (e, item) => { touchItemRef.current = item; };
   const handleTouchMove = (e) => {};
@@ -704,6 +778,21 @@ function DeviceMasterEditor({ list, models, onSave, onDelete }) {
     });
     return wardGroups;
   }, [displayList]);
+
+  // 病棟の表示順を決定
+  const sortedWards = useMemo(() => {
+    const presentWards = Object.keys(devicesByWardAndMonitor);
+    return presentWards.sort((a, b) => {
+      const wa = wardList.find(w => w.name === a);
+      const wb = wardList.find(w => w.name === b);
+      
+      const orderA = wa ? (wa.sortOrder ?? 9999) : 9999;
+      const orderB = wb ? (wb.sortOrder ?? 9999) : 9999;
+      
+      if (orderA !== orderB) return orderA - orderB;
+      return a.localeCompare(b);
+    });
+  }, [devicesByWardAndMonitor, wardList]);
 
   if (addMode) {
     return (
@@ -826,42 +915,70 @@ function DeviceMasterEditor({ list, models, onSave, onDelete }) {
       )}
 
       <div className="space-y-3">
-        {Object.entries(devicesByWardAndMonitor).map(([ward, monitorGroups]) => (
-          <div key={ward} className="border rounded-lg bg-white overflow-hidden shadow-sm">
-            <button onClick={() => toggleWard(ward)} className="w-full p-3 bg-gray-50 flex justify-between items-center hover:bg-gray-100 transition-colors">
-              <div className="flex items-center gap-2"><MapPin size={18} className="text-blue-500"/><span className="font-bold text-gray-800">{ward}</span></div>
-              {expandedWards[ward] ? <ChevronUp size={20} className="text-gray-400"/> : <ChevronDown size={20} className="text-gray-400"/>}
-            </button>
-            
-            {expandedWards[ward] && (
-              <div className="p-3 bg-white space-y-4 animate-slide-up">
-                {Object.entries(monitorGroups).map(([monitorName, monitorDevices]) => (
-                  <div key={monitorName} className="border rounded-md overflow-hidden">
-                    <div className="bg-gray-100 px-3 py-2 flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-sm font-bold text-gray-700"><Monitor size={14} className="text-green-600"/>{monitorName}</div>
-                      <button onClick={() => { const match = monitorName.match(/^(.+)\s\((.+)\)$/); setEditingMonitor({ oldName: monitorName, model: match ? match[1] : monitorName, serial: match ? match[2] : '' }); }} className="text-xs flex items-center gap-1 bg-white border px-2 py-1 rounded hover:bg-blue-50 text-blue-600 transition-colors"><Edit2 size={12}/> 編集</button>
-                    </div>
-                    <div className="divide-y divide-gray-100 relative">
-                      {monitorDevices.map(d => (
-                        <div key={d.id} data-device-id={d.id} className="p-2 flex justify-between items-center bg-white">
-                          <div className="flex items-center gap-2">
-                            <div className="p-2 cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 touch-none" draggable="true" onDragStart={(e) => handleDragStart(e, d)} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, d)} onTouchStart={(e) => handleTouchStart(e, d)} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}><Menu size={16}/></div>
-                            <span className="font-bold font-mono text-gray-800 w-16 text-right">ch:{d.id}</span>
-                            <span className="text-xs text-gray-400">({d.model})</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => handleStartEdit(d)} className="p-1.5 text-blue-500 hover:bg-blue-50 rounded transition-colors"><Edit2 size={16}/></button>
-                            <button onClick={() => onDelete(d.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"><Trash2 size={16}/></button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+        {/* 病棟ごとのリスト (並び替え対応) */}
+        {sortedWards.map((ward) => {
+          const monitorGroups = devicesByWardAndMonitor[ward];
+          return (
+            <div 
+              key={ward} 
+              className="border rounded-lg bg-white overflow-hidden shadow-sm transition-all"
+              draggable="true"
+              onDragStart={(e) => handleWardDragStart(e, ward)}
+              onDragOver={handleDragOver}
+              onDrop={(e) => handleWardDrop(e, ward)}
+            >
+              <div className="w-full p-3 bg-gray-50 flex justify-between items-center hover:bg-gray-100 transition-colors cursor-move relative group">
+                {/* ドラッグハンドル（視覚的） */}
+                <div className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity"><Menu size={14}/></div>
+                
+                <button onClick={(e) => { e.stopPropagation(); toggleWard(ward); }} className="flex-1 flex justify-between items-center pl-6">
+                  <div className="flex items-center gap-2"><MapPin size={18} className="text-blue-500"/><span className="font-bold text-gray-800">{ward}</span></div>
+                  {expandedWards[ward] ? <ChevronUp size={20} className="text-gray-400"/> : <ChevronDown size={20} className="text-gray-400"/>}
+                </button>
               </div>
-            )}
-          </div>
-        ))}
+              
+              {expandedWards[ward] && (
+                <div className="p-3 bg-white space-y-4 animate-slide-up">
+                  {Object.entries(monitorGroups).map(([monitorName, monitorDevices]) => (
+                    <div key={monitorName} className="border rounded-md overflow-hidden">
+                      <div className="bg-gray-100 px-3 py-2 flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-sm font-bold text-gray-700"><Monitor size={14} className="text-green-600"/>{monitorName}</div>
+                        <button onClick={() => { const match = monitorName.match(/^(.+)\s\((.+)\)$/); setEditingMonitor({ oldName: monitorName, model: match ? match[1] : monitorName, serial: match ? match[2] : '' }); }} className="text-xs flex items-center gap-1 bg-white border px-2 py-1 rounded hover:bg-blue-50 text-blue-600 transition-colors"><Edit2 size={12}/> 編集</button>
+                      </div>
+                      <div className="divide-y divide-gray-100 relative">
+                        {monitorDevices.map(d => (
+                          <div 
+                            key={d.id} 
+                            data-device-id={d.id} 
+                            className="p-2 flex justify-between items-center bg-white cursor-move active:bg-blue-50 active:opacity-80"
+                            draggable="true" 
+                            onDragStart={(e) => handleDragStart(e, d)} 
+                            onDragOver={handleDragOver} 
+                            onDrop={(e) => handleDrop(e, d)} 
+                            onTouchStart={(e) => handleTouchStart(e, d)} 
+                            onTouchMove={handleTouchMove} 
+                            onTouchEnd={handleTouchEnd}
+                          >
+                            <div className="flex items-center gap-2 pointer-events-none">
+                              <div className="p-2 text-gray-400"><Menu size={16}/></div>
+                              <span className="font-bold font-mono text-gray-800 w-16 text-right">ch:{d.id}</span>
+                              <span className="text-xs text-gray-400">({d.model})</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {/* ボタンでのドラッグ発火防止は handleDragStart で制御済み */}
+                              <button onClick={() => handleStartEdit(d)} className="p-1.5 text-blue-500 hover:bg-blue-50 rounded transition-colors"><Edit2 size={16}/></button>
+                              <button onClick={() => onDelete(d.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"><Trash2 size={16}/></button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
