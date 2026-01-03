@@ -4,7 +4,7 @@ import {
   Activity, Filter, MapPin, Monitor, Settings, User, Plus, Trash2, Edit2, 
   History, LogOut, FileText, ChevronDown, ChevronUp, ArrowRight, ArrowLeft,
   Server, Grid, Layers, Menu, BarChart2, Calendar, AlertOctagon, HelpCircle,
-  Cloud, Clock, FastForward, MessageSquare, ArrowUp, ArrowDown, Info
+  Cloud, Clock, FastForward, MessageSquare, ArrowUp, ArrowDown, Info, List
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -191,16 +191,6 @@ function App() {
     const checkedCount = Object.keys(records).length;
     return Math.round((checkedCount / devices.length) * 100);
   }, [devices, records]);
-
-  // 次の病棟を取得するロジック
-  const nextWard = useMemo(() => {
-      if (!selectedWard) return null;
-      const currentIndex = wards.indexOf(selectedWard);
-      if (currentIndex >= 0 && currentIndex < wards.length - 1) {
-          return wards[currentIndex + 1];
-      }
-      return null;
-  }, [selectedWard, wards]);
 
   const handleDownloadCSV = (targetRecords, fileNameDate) => {
     const list = Array.isArray(targetRecords) ? targetRecords : Object.values(targetRecords);
@@ -417,16 +407,12 @@ function App() {
                 
                 {/* リスト最下部に追加のナビゲーション */}
                 <div className="pt-4 pb-8 border-t border-dashed border-gray-300">
-                    <div className="flex gap-4">
-                        <button onClick={() => setSelectedWard(null)} className="flex-1 py-4 bg-gray-200 text-gray-600 font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-gray-300 transition-colors">
-                           <ArrowLeft size={20} /> 病棟選択に戻る
-                        </button>
-                        {nextWard && (
-                            <button onClick={() => { setSelectedWard(nextWard); window.scrollTo({top: 0, behavior: 'smooth'}); }} className="flex-1 py-4 bg-blue-100 text-blue-700 font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-blue-200 transition-colors">
-                                次の病棟へ <ArrowRight size={20} />
-                            </button>
-                        )}
-                    </div>
+                    <button 
+                        onClick={() => { setSelectedWard(null); window.scrollTo({top: 0, behavior: 'smooth'}); }} 
+                        className="w-full py-4 bg-blue-100 text-blue-700 font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-blue-200 transition-colors shadow-sm"
+                    >
+                        <Grid size={20} /> 次の病棟を選ぶ
+                    </button>
                 </div>
 
               </div>
@@ -434,8 +420,6 @@ function App() {
           )}
         </div>
       </main>
-      
-      {/* Footer (病棟選択画面用) は削除されました */}
       
       {/* Footer (病棟選択中) */}
       {selectedWard && (
@@ -1367,8 +1351,6 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
     });
   }, [historyRecords, filterMode, searchTerm]);
 
-  // ★以前の全体統計(stats)は削除し、日付ごとの計算に切り替えます
-
   // マスタ情報を使ってソート順を決定するヘルパー
   const getDeviceSortOrder = (deviceId) => {
     const d = devices.find(dev => dev.id === deviceId);
@@ -1398,15 +1380,13 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
          const wb = getWardSortOrder(b.ward);
          if (wa !== wb) return wa - wb;
          
-         // 2. モニタグループ順 (文字列比較)
-         if (a.monitorGroup !== b.monitorGroup) return a.monitorGroup.localeCompare(b.monitorGroup);
-
-         // 3. 機器順 (sortOrder)
+         // 2. 機器順 (sortOrder)
+         // モニタ名でのソートを削除し、機器マスタのsortOrderを優先
          const da = getDeviceSortOrder(a.deviceId);
          const db = getDeviceSortOrder(b.deviceId);
          if (da !== db) return da - db; // sortOrderに差があればそれで決定
 
-         // 4. sortOrderが同じ（未設定など）ならID順（ch順）
+         // 3. sortOrderが同じ（未設定など）ならID順（ch順）
          return a.deviceId.localeCompare(b.deviceId);
       });
     });
@@ -1415,29 +1395,39 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
   }, [filteredRecords, devices, wardList]);
 
   // 表示用に階層化されたデータを生成する
-  // 構造: { [date]: [ { ward: '...', monitors: [ { name: '...', records: [...] } ] } ] }
+  // 修正: マスタ順(groupedHistory)の並び順を維持したまま構造化する
   const displayStructure = useMemo(() => {
       const result = {};
       Object.entries(groupedHistory).forEach(([date, records]) => {
+          // records は既にマスタ順（病棟>モニタ>機器）でソート済み
+          
+          // 1. 病棟ごとにグループ化しつつ、出現順（マスタ順）を維持する
+          const wardsOrder = [];
           const wardMap = {};
-          
+
           records.forEach(r => {
-              if(!wardMap[r.ward]) wardMap[r.ward] = {};
-              if(!wardMap[r.ward][r.monitorGroup]) wardMap[r.ward][r.monitorGroup] = [];
-              wardMap[r.ward][r.monitorGroup].push(r);
+              if (!wardMap[r.ward]) {
+                  wardMap[r.ward] = { name: r.ward, monitors: [] }; // monitorsを配列で管理
+                  wardsOrder.push(r.ward);
+              }
+              
+              // モニタグループの検索または追加
+              let monitorGroup = wardMap[r.ward].monitors.find(m => m.name === r.monitorGroup);
+              if (!monitorGroup) {
+                  monitorGroup = { name: r.monitorGroup, records: [] };
+                  wardMap[r.ward].monitors.push(monitorGroup);
+              }
+              monitorGroup.records.push(r);
           });
-          
-          // 病棟順に並べ替え
-          const sortedWardKeys = Object.keys(wardMap).sort((a, b) => getWardSortOrder(a) - getWardSortOrder(b));
-          
-          result[date] = sortedWardKeys.map(ward => {
-              const monitorMap = wardMap[ward];
-              const sortedMonitors = Object.keys(monitorMap).sort(); // モニタ名は名前順
+
+          // 結果の構築
+          result[date] = wardsOrder.map(wardName => {
+              const wardData = wardMap[wardName];
               return {
-                  wardName: ward,
-                  monitors: sortedMonitors.map(mon => ({
-                      monitorName: mon,
-                      records: monitorMap[mon] // レコードはすでにsortOrder順
+                  wardName: wardName,
+                  monitors: wardData.monitors.map(m => ({
+                      monitorName: m.name,
+                      records: m.records
                   }))
               };
           });
@@ -1702,6 +1692,20 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
             onExportDaily={(date) => {
                 const targets = historyRecords.filter(r => r.date === date);
                 if(targets.length === 0) return alert('該当日のデータがありません');
+                
+                // 日報出力時もマスタ順にソートする
+                targets.sort((a, b) => {
+                     const wa = getWardSortOrder(a.ward);
+                     const wb = getWardSortOrder(b.ward);
+                     if (wa !== wb) return wa - wb;
+                     
+                     const da = getDeviceSortOrder(a.deviceId);
+                     const db = getDeviceSortOrder(b.deviceId);
+                     if (da !== db) return da - db; 
+
+                     return a.deviceId.localeCompare(b.deviceId);
+                });
+
                 onDownloadCSV(targets, date);
                 setShowExportModal(false);
             }}
