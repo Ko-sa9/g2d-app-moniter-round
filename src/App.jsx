@@ -126,8 +126,10 @@ function App() {
     }, (error) => console.error("Device sync error", error));
 
     // 2. Staff (担当者マスタ)
+    // 修正: sortOrder順にソートするよう修正
     const unsubStaff = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'staff'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
+      list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
       setStaffList(list);
     }, (error) => console.error("Staff sync error", error));
 
@@ -364,7 +366,7 @@ function App() {
           ) : (
             // 機器リスト表示画面（病棟選択後）
             <div className="space-y-4 animate-slide-up">
-              {/* ナビゲーションヘッダ：戻るボタン削除、現在の病棟名を表示 */}
+              {/* ナビゲーションヘッダ */}
               <div className="flex justify-end items-center">
                 <div className="text-sm font-bold bg-white px-3 py-1 rounded-full shadow-sm border text-gray-600">{selectedWard}</div>
               </div>
@@ -398,7 +400,7 @@ function App() {
                     </div>
                   ))
                 ) : (
-                  // グルーピングなし（基本的にはここは通らないが念のため）
+                  // グルーピングなし
                   <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden divide-y divide-gray-100">
                     {filteredDevices.map(device => (
                         <DeviceRow 
@@ -419,8 +421,6 @@ function App() {
                   </div>
                 )}
                 {filteredDevices.length === 0 && <div className="text-center py-10 text-gray-400 text-sm">該当する機器が見つかりません</div>}
-                
-                {/* 削除: 下部にあった「次の病棟を選ぶ」ボタンのブロックは削除済み */}
               </div>
             </div>
           )}
@@ -431,7 +431,6 @@ function App() {
       {selectedWard && (
         <div className="bg-white p-4 border-t sticky bottom-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] safe-area-bottom z-10">
           <div className="max-w-3xl mx-auto flex justify-between items-center">
-             {/* 文言変更: 「一覧に戻る」→「病棟選択に戻る」 */}
              <button onClick={() => setSelectedWard(null)} className="flex items-center gap-1 text-gray-500 font-bold hover:text-gray-700">
                 <ChevronDown size={20} className="rotate-90"/> 病棟選択に戻る
              </button>
@@ -699,12 +698,12 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
             )}
         </div>
 
-        {/* 保存 (New) - 青色に変更 */}
+        {/* 保存 */}
         <button onClick={handleSave} className="col-span-1 py-4 bg-blue-500 text-white rounded-xl flex justify-center items-center hover:bg-blue-600 active:scale-95 transition-all shadow-sm">
             <Save size={24}/>
         </button>
         
-        {/* 次へ - 「戻る」と同じ配色に変更 */}
+        {/* 次へ */}
         <button onClick={handleSaveAndNext} disabled={isLast} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all ${isLast ? 'bg-gray-100 text-gray-300 cursor-not-allowed' : 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-95'}`}>
             <ArrowRight size={24}/>
         </button>
@@ -828,7 +827,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     return sorted.filter((d) => d.id.includes(filterText) || d.monitorGroup.includes(filterText) || d.ward.includes(filterText));
   }, [list, filterText]);
 
-  // ★修正: 機器追加時の病棟リストをマスタ順(wardListのsortOrder)にソート
+  // 機器追加時の病棟リストをマスタ順(wardListのsortOrder)にソート
   const allWards = useMemo(() => {
     const uniqueWards = Array.from(new Set(list.map((d) => d.ward)));
     
@@ -1262,15 +1261,81 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
   );
 }
 
-// StaffMasterEditor: スタッフ編集画面
+// StaffMasterEditor: スタッフ編集画面 (DnD対応)
 function StaffMasterEditor({ list, onSave, onDelete }) {
   const [formData, setFormData] = useState({ id: '', name: '' });
   const [editItem, setEditItem] = useState(null);
+  const [draggedItem, setDraggedItem] = useState(null);
+  const touchItemRef = useRef(null);
 
   useEffect(() => {
     if (editItem) setFormData(editItem);
     else setFormData({ id: crypto.randomUUID(), name: '' });
   }, [editItem]);
+
+  // 新規追加・更新時の処理
+  const handleSaveWrapper = () => {
+    if (!formData.name) return;
+    
+    const itemToSave = { ...formData };
+    
+    // 新規追加の場合、sortOrderを末尾に設定
+    if (!itemToSave.sortOrder && !editItem) {
+        const maxSort = list.length > 0 ? Math.max(...list.map(s => s.sortOrder || 0)) : 0;
+        itemToSave.sortOrder = maxSort + 1;
+    }
+    
+    onSave(itemToSave);
+    setFormData({ id: crypto.randomUUID(), name: '' });
+    setEditItem(null);
+  };
+
+  // DnD Handlers
+  const handleDragStart = (e, item) => {
+      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+          e.preventDefault();
+          return;
+      }
+      setDraggedItem(item);
+      if ('dataTransfer' in e) e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = async (e, targetItem) => {
+      e.preventDefault();
+      if (!draggedItem || draggedItem.id === targetItem.id) return;
+      
+      const batch = writeBatch(db);
+      const draggedOrder = draggedItem.sortOrder ?? 0;
+      const targetOrder = targetItem.sortOrder ?? 0;
+      
+      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'staff', draggedItem.id), { sortOrder: targetOrder });
+      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'staff', targetItem.id), { sortOrder: draggedOrder });
+      
+      await batch.commit();
+      setDraggedItem(null);
+  };
+
+  // Touch Handlers for Mobile
+  const handleTouchStart = (e, item) => { touchItemRef.current = item; };
+  const handleTouchMove = (e) => {}; // Prevent default scrolling if necessary, but careful
+  const handleTouchEnd = async (e) => {
+    const changedTouch = e.changedTouches[0];
+    const elem = document.elementFromPoint(changedTouch.clientX, changedTouch.clientY);
+    const targetRow = elem?.closest('[data-staff-id]');
+    if (targetRow && touchItemRef.current) {
+      const targetId = targetRow.getAttribute('data-staff-id');
+      if (targetId && targetId !== touchItemRef.current.id) {
+        const targetStaff = list.find((s) => s.id === targetId);
+        if (targetStaff) await handleDrop({ preventDefault: () => {} }, targetStaff);
+      }
+    }
+    touchItemRef.current = null;
+  };
 
   return (
     <div className="space-y-4">
@@ -1279,13 +1344,27 @@ function StaffMasterEditor({ list, onSave, onDelete }) {
         <div className="flex gap-2">
           <input className="border p-2 rounded flex-1" placeholder="氏名" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
           {editItem && <button onClick={() => setEditItem(null)} className="px-3 py-1 bg-gray-300 rounded">キャンセル</button>}
-          <button disabled={!formData.name} onClick={() => { onSave(formData); setFormData({id: crypto.randomUUID(), name:''}); setEditItem(null); }} className="px-3 py-1 bg-blue-600 text-white rounded flex items-center gap-1"><Save size={16}/> 保存</button>
+          <button disabled={!formData.name} onClick={handleSaveWrapper} className="px-3 py-1 bg-blue-600 text-white rounded flex items-center gap-1"><Save size={16}/> 保存</button>
         </div>
       </div>
       <div className="space-y-2">
         {list.map(s => (
-          <div key={s.id} className="bg-white p-3 rounded shadow flex justify-between items-center">
-            <span className="font-bold">{s.name}</span>
+          <div 
+            key={s.id} 
+            data-staff-id={s.id}
+            className="bg-white p-3 rounded shadow flex justify-between items-center cursor-move active:bg-blue-50 active:opacity-80"
+            draggable="true"
+            onDragStart={(e) => handleDragStart(e, s)}
+            onDragOver={handleDragOver}
+            onDrop={(e) => handleDrop(e, s)}
+            onTouchStart={(e) => handleTouchStart(e, s)} 
+            onTouchMove={handleTouchMove} 
+            onTouchEnd={handleTouchEnd}
+          >
+            <div className="flex items-center gap-3 pointer-events-none">
+                <Menu size={16} className="text-gray-400"/>
+                <span className="font-bold">{s.name}</span>
+            </div>
             <div className="flex gap-2">
               <button onClick={() => setEditItem(s)} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={18}/></button>
               <button onClick={() => onDelete(s.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={18}/></button>
