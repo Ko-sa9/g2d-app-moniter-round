@@ -72,6 +72,31 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
+  // 担当者名の永続化と日付変更時のリセット
+  useEffect(() => {
+      const savedData = localStorage.getItem('g2d_staff_curr');
+      if (savedData) {
+          try {
+              const parsed = JSON.parse(savedData);
+              if (parsed.date === today) {
+                  setCurrentStaff(parsed.name);
+              } else {
+                  // 日付が変わっている場合はリセット
+                  localStorage.removeItem('g2d_staff_curr');
+              }
+          } catch (e) {
+              console.error("Storage parse error", e);
+          }
+      }
+  }, [today]);
+
+  useEffect(() => {
+      if (currentStaff) {
+          localStorage.setItem('g2d_staff_curr', JSON.stringify({ name: currentStaff, date: today }));
+      }
+  }, [currentStaff, today]);
+
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -410,20 +435,7 @@ function App() {
         </div>
       </main>
       
-      {/* Footer */}
-      {Object.keys(records).length > 0 && !selectedWard && (
-        <div className="bg-white p-4 border-t sticky bottom-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] safe-area-bottom z-10 animate-slide-up">
-          <div className="max-w-3xl mx-auto flex justify-between items-center">
-            <div className="flex flex-col">
-              <div className="text-xs text-gray-500"><span className="font-bold text-gray-800 text-base mr-1">{Object.keys(records).length}</span>件 記録済</div>
-              <div className="text-[10px] text-green-600 flex items-center gap-1 font-bold animate-pulse"><Cloud size={12}/> 自動保存済み</div>
-            </div>
-            <button onClick={() => setShowConfirmSave(true)} className="flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-lg font-bold shadow hover:bg-blue-700 active:scale-95 transition-transform">
-              <CheckCircle size={20} /> 本日の点検完了
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Footer (病棟選択画面用) は削除されました */}
       
       {/* Footer (病棟選択中) */}
       {selectedWard && (
@@ -1392,7 +1404,10 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
          // 3. 機器順 (sortOrder)
          const da = getDeviceSortOrder(a.deviceId);
          const db = getDeviceSortOrder(b.deviceId);
-         return da - db;
+         if (da !== db) return da - db; // sortOrderに差があればそれで決定
+
+         // 4. sortOrderが同じ（未設定など）ならID順（ch順）
+         return a.deviceId.localeCompare(b.deviceId);
       });
     });
 
