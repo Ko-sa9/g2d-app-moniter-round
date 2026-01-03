@@ -4,7 +4,7 @@ import {
   Activity, Filter, MapPin, Monitor, Settings, User, Plus, Trash2, Edit2, 
   History, LogOut, FileText, ChevronDown, ChevronUp, ArrowRight, ArrowLeft,
   Server, Grid, Layers, Menu, BarChart2, Calendar, AlertOctagon, HelpCircle,
-  Cloud, Clock, FastForward, MessageSquare, ArrowUp, ArrowDown, Info, LogIn
+  Cloud, Clock, FastForward, MessageSquare, ArrowUp, ArrowDown, Info
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -51,17 +51,19 @@ function App() {
   const [records, setRecords] = useState({});
 
   const [selectedWard, setSelectedWard] = useState(null);
+  // selectedDevice: 現在展開中（編集モード）のデバイスIDを保持
   const [selectedDevice, setSelectedDevice] = useState(null); 
+  // historyTargetDevice: 個別履歴を表示する対象のデバイス
   const [historyTargetDevice, setHistoryTargetDevice] = useState(null);
 
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showConfirmSave, setShowConfirmSave] = useState(false);
   
+  // 時計用のstate
   const [currentTime, setCurrentTime] = useState(new Date());
 
   // 修正: アプリ起動時（またはリロード時）の日付で固定し、データ保存とクエリの日付を一致させる
-  // これにより、日付を跨いで作業してもリストから消えることを防ぐ
   const today = useMemo(() => getTodayString(), []);
 
   // 時計の更新
@@ -86,24 +88,28 @@ function App() {
   useEffect(() => {
     if (!user) return;
     
+    // 1. Devices
     const unsubDevices = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'devices'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999) || a.id.localeCompare(b.id));
       setDevices(list);
     }, (error) => console.error("Device sync error", error));
 
+    // 2. Staff (Updated sort)
     const unsubStaff = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'staff'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
       setStaffList(list);
     }, (error) => console.error("Staff sync error", error));
 
+    // 3. Models (Updated sort)
     const unsubModels = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'transmitter_models'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
       setTransmitterModels(list);
     }, (error) => console.error("Models sync error", error));
 
+    // 4. Wards (病棟マスタ・順序)
     const unsubWards = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'wards'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
@@ -111,7 +117,6 @@ function App() {
     }, (error) => console.error("Wards sync error", error));
 
     // 5. Checks
-    // 依存配列に today を含め、日付が変わった場合（リロード等）に正しくクエリするようにする
     const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'), where('date', '==', today));
     const unsubChecks = onSnapshot(q, (snapshot) => {
       const recs = {};
@@ -155,6 +160,7 @@ function App() {
     return groups;
   }, [selectedWard, filteredDevices]);
 
+  // 全体の進捗率
   const totalProgress = useMemo(() => {
     if (devices.length === 0) return 0;
     const checkedCount = Object.keys(records).length;
@@ -209,19 +215,23 @@ function App() {
     setShowConfirmSave(false);
   };
 
+  // デバイスの展開切り替え処理
   const toggleDevice = (device) => {
     if (selectedDevice && selectedDevice.id === device.id) {
-      setSelectedDevice(null);
+      setSelectedDevice(null); // 同じものをタップしたら閉じる
     } else {
       setSelectedDevice(device);
     }
   };
 
+  // 個別履歴表示
   const handleShowDeviceHistory = (device) => {
       setHistoryTargetDevice(device);
   };
 
+  // 保存処理 (インラインフォームから呼ばれる)
   const handleSaveRecord = async (record, action = 'CLOSE') => {
+    // inUseがnull（未入力）の場合は保存をスキップする
     if (record.inUse !== null) {
         const deviceMaster = devices.find(d => d.id === record.deviceId);
         if(deviceMaster) {
@@ -352,7 +362,7 @@ function App() {
                             checker={currentStaff}
                             isFirst={filteredDevices.length > 0 && filteredDevices[0].id === device.id}
                             isLast={filteredDevices.length > 0 && filteredDevices[filteredDevices.length - 1].id === device.id}
-                            date={today} // 修正: 固定した日付を渡す
+                            date={today}
                           />
                         ))}
                       </div>
@@ -373,14 +383,14 @@ function App() {
                             checker={currentStaff}
                             isFirst={filteredDevices.length > 0 && filteredDevices[0].id === device.id}
                             isLast={filteredDevices.length > 0 && filteredDevices[filteredDevices.length - 1].id === device.id}
-                            date={today} // 修正: 固定した日付を渡す
+                            date={today}
                         />
                     ))}
                   </div>
                 )}
                 {filteredDevices.length === 0 && <div className="text-center py-10 text-gray-400 text-sm">該当する機器が見つかりません</div>}
                 
-                {/* 修正: リスト最下部に追加のナビゲーション */}
+                {/* リスト最下部に追加のナビゲーション */}
                 <div className="pt-4 pb-8 border-t border-dashed border-gray-300">
                     <div className="flex gap-4">
                         <button onClick={() => setSelectedWard(null)} className="flex-1 py-4 bg-gray-200 text-gray-600 font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-gray-300 transition-colors">
@@ -415,7 +425,7 @@ function App() {
         </div>
       )}
       
-      {/* Footer (病棟選択中) - 修正: 一覧に戻るボタンを追加 */}
+      {/* Footer (病棟選択中) */}
       {selectedWard && (
         <div className="bg-white p-4 border-t sticky bottom-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] safe-area-bottom z-10">
           <div className="max-w-3xl mx-auto flex justify-between items-center">
@@ -463,7 +473,7 @@ function App() {
 // --- Sub Components ---
 
 // DeviceRow: 展開状態（isExpanded）に応じてインラインフォームを表示
-function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onShowHistory, checker, isFirst, isLast, date }) { // date 追加
+function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onShowHistory, checker, isFirst, isLast, date }) {
   const isChecked = !!record;
   const rowRef = useRef(null);
   
@@ -538,7 +548,7 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onS
                 onDelete={onDelete}
                 isFirst={isFirst} 
                 isLast={isLast}
-                date={date} // date 追加
+                date={date}
             />
         </div>
       )}
@@ -547,7 +557,7 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onS
 }
 
 // CheckInlineForm: モーダルの中身をインライン用に調整したコンポーネント
-function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDelete, isFirst, isLast, date }) { // date 追加
+function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDelete, isFirst, isLast, date }) {
   const [inUse, setInUse] = useState(initialData?.inUse || null);
   const [reception, setReception] = useState(initialData?.reception || 'GOOD');
   const [receptionReason, setReceptionReason] = useState(initialData?.receptionReason || 'A');
@@ -578,10 +588,9 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
   }, [inUse]);
 
   const createRecord = () => {
-    // 修正: 親コンポーネントから渡された固定日付(date)を使用する
     return {
       deviceId: device.id, ward: device.ward,
-      date: date, // 変更: getTodayString() から props.date へ
+      date: date,
       timestamp: new Date().toLocaleString('ja-JP'), checker: checker || '',
       inUse, reception: inUse === 'YES' ? reception : '-',
       receptionReason: (inUse === 'YES' && reception === 'BAD') ? receptionReason : null,
@@ -661,11 +670,14 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
         <textarea className="w-full p-3 border rounded-lg text-sm focus:ring-2 focus:ring-blue-300 focus:border-blue-300 focus:outline-none transition-shadow bg-gray-50" rows={2} placeholder="特記事項があれば入力してください..." value={note} onChange={(e) => setNote(e.target.value)} />
       </div>
 
-      <div className="pt-2 grid grid-cols-3 gap-3">
+      {/* ボタン配置の変更: 左から「戻る」「取消」「保存」「次へ」 */}
+      <div className="pt-2 grid grid-cols-4 gap-3">
+        {/* 戻る */}
         <button onClick={handleSaveAndPrev} disabled={isFirst} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all ${isFirst ? 'bg-gray-100 text-gray-300 cursor-not-allowed' : 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-95'}`}>
             <ArrowLeft size={24}/>
         </button>
 
+        {/* 取消 */}
         <div className="col-span-1">
              {initialData ? (
                 <button onClick={() => onDelete(initialData)} className="w-full py-4 bg-red-50 text-red-500 rounded-xl flex justify-center items-center hover:bg-red-100 active:scale-95 transition-all">
@@ -675,7 +687,13 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
                 <div className="w-full h-full bg-gray-50 rounded-xl"></div>
             )}
         </div>
+
+        {/* 保存 (New) */}
+        <button onClick={handleSave} className="col-span-1 py-4 bg-green-500 text-white rounded-xl flex justify-center items-center hover:bg-green-600 active:scale-95 transition-all shadow-sm">
+            <Save size={24}/>
+        </button>
         
+        {/* 次へ */}
         <button onClick={handleSaveAndNext} disabled={isLast} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all shadow-sm ${isLast ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95'}`}>
             <ArrowRight size={24}/>
         </button>
@@ -1212,66 +1230,11 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
 function StaffMasterEditor({ list, onSave, onDelete }) {
   const [formData, setFormData] = useState({ id: '', name: '' });
   const [editItem, setEditItem] = useState(null);
-  
-  // Drag State
-  const [draggedItem, setDraggedItem] = useState(null);
 
   useEffect(() => {
     if (editItem) setFormData(editItem);
     else setFormData({ id: crypto.randomUUID(), name: '' });
   }, [editItem]);
-
-  // Drag Handlers
-  const handleDragStart = (e, item) => {
-    // Prevent drag if clicking buttons
-    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
-      e.preventDefault();
-      return;
-    }
-    setDraggedItem(item);
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-  };
-
-  const handleDrop = async (e, targetItem) => {
-    e.preventDefault();
-    if (!draggedItem || draggedItem.id === targetItem.id) return;
-
-    const currentList = [...list];
-    const fromIndex = currentList.findIndex(i => i.id === draggedItem.id);
-    const toIndex = currentList.findIndex(i => i.id === targetItem.id);
-    
-    if (fromIndex === -1 || toIndex === -1) return;
-
-    const newList = [...currentList];
-    const [moved] = newList.splice(fromIndex, 1);
-    newList.splice(toIndex, 0, moved);
-
-    // Batch update all items with new sortOrder
-    const batch = writeBatch(db);
-    newList.forEach((item, index) => {
-        const ref = doc(db, 'artifacts', appId, 'public', 'data', 'staff', item.id);
-        batch.update(ref, { sortOrder: index + 1 });
-    });
-    await batch.commit();
-    setDraggedItem(null);
-  };
-
-  const handleSaveWrapper = (data) => {
-      // Calculate Sort Order if new
-      if (!editItem) { 
-          const maxSort = list.length > 0 ? Math.max(...list.map(i => i.sortOrder || 0)) : 0;
-          onSave({ ...data, sortOrder: maxSort + 1 });
-      } else {
-          onSave(data);
-      }
-      setFormData({id: crypto.randomUUID(), name:''});
-      setEditItem(null);
-  };
 
   return (
     <div className="space-y-4">
@@ -1280,23 +1243,13 @@ function StaffMasterEditor({ list, onSave, onDelete }) {
         <div className="flex gap-2">
           <input className="border p-2 rounded flex-1" placeholder="氏名" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
           {editItem && <button onClick={() => setEditItem(null)} className="px-3 py-1 bg-gray-300 rounded">キャンセル</button>}
-          <button disabled={!formData.name} onClick={() => handleSaveWrapper(formData)} className="px-3 py-1 bg-blue-600 text-white rounded flex items-center gap-1"><Save size={16}/> 保存</button>
+          <button disabled={!formData.name} onClick={() => { onSave(formData); setFormData({id: crypto.randomUUID(), name:''}); setEditItem(null); }} className="px-3 py-1 bg-blue-600 text-white rounded flex items-center gap-1"><Save size={16}/> 保存</button>
         </div>
       </div>
       <div className="space-y-2">
         {list.map(s => (
-          <div 
-            key={s.id} 
-            className="bg-white p-3 rounded shadow flex justify-between items-center cursor-move active:bg-blue-50"
-            draggable="true"
-            onDragStart={(e) => handleDragStart(e, s)}
-            onDragOver={handleDragOver}
-            onDrop={(e) => handleDrop(e, s)}
-          >
-            <div className="flex items-center gap-2 pointer-events-none">
-                <Menu size={16} className="text-gray-400" />
-                <span className="font-bold">{s.name}</span>
-            </div>
+          <div key={s.id} className="bg-white p-3 rounded shadow flex justify-between items-center">
+            <span className="font-bold">{s.name}</span>
             <div className="flex gap-2">
               <button onClick={() => setEditItem(s)} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={18}/></button>
               <button onClick={() => onDelete(s.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={18}/></button>
@@ -1312,63 +1265,14 @@ function StaffMasterEditor({ list, onSave, onDelete }) {
 function TransmitterModelEditor({ list, onSave, onDelete }) {
   const [formData, setFormData] = useState({ id: '', name: '', type: 'TRANSMITTER' });
   const [editItem, setEditItem] = useState(null);
-  
-  // Drag State
-  const [draggedItem, setDraggedItem] = useState(null);
 
   useEffect(() => {
     if (editItem) setFormData(editItem);
     else setFormData({ id: '', name: '', type: 'TRANSMITTER' });
   }, [editItem]);
 
-  // Drag Handlers
-  const handleDragStart = (e, item) => {
-    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
-      e.preventDefault();
-      return;
-    }
-    setDraggedItem(item);
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-  };
-
-  const handleDrop = async (e, targetItem) => {
-    e.preventDefault();
-    if (!draggedItem || draggedItem.id === targetItem.id) return;
-
-    const currentList = [...list];
-    const fromIndex = currentList.findIndex(i => i.id === draggedItem.id);
-    const toIndex = currentList.findIndex(i => i.id === targetItem.id);
-    
-    if (fromIndex === -1 || toIndex === -1) return;
-
-    const newList = [...currentList];
-    const [moved] = newList.splice(fromIndex, 1);
-    newList.splice(toIndex, 0, moved);
-
-    // Batch update
-    const batch = writeBatch(db);
-    newList.forEach((item, index) => {
-        const ref = doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', item.id);
-        batch.update(ref, { sortOrder: index + 1 });
-    });
-    await batch.commit();
-    setDraggedItem(null);
-  };
-
   const handleSubmit = async () => {
-    let itemToSave = editItem ? formData : { ...formData, id: formData.name };
-    
-    // Add sortOrder if new
-    if (!editItem) {
-        const maxSort = list.length > 0 ? Math.max(...list.map(i => i.sortOrder || 0)) : 0;
-        itemToSave = { ...itemToSave, sortOrder: maxSort + 1 };
-    }
-
+    const itemToSave = editItem ? formData : { ...formData, id: formData.name }; 
     await onSave(itemToSave);
     setFormData({ id: '', name: '', type: 'TRANSMITTER' });
     setEditItem(null);
@@ -1390,18 +1294,8 @@ function TransmitterModelEditor({ list, onSave, onDelete }) {
       </div>
       <div className="space-y-2">
         {list.map(m => (
-          <div 
-            key={m.id} 
-            className="bg-white p-3 rounded shadow flex justify-between items-center cursor-move active:bg-blue-50"
-            draggable="true"
-            onDragStart={(e) => handleDragStart(e, m)}
-            onDragOver={handleDragOver}
-            onDrop={(e) => handleDrop(e, m)}
-          >
-            <div className="flex items-center gap-2 pointer-events-none">
-                <Menu size={16} className="text-gray-400" />
-                <span className={`text-xs px-2 py-0.5 rounded mr-2 ${m.type === 'TRANSMITTER' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800'}`}>{m.type === 'TRANSMITTER' ? '送信機' : 'モニタ'}</span><span className="font-bold">{m.name}</span>
-            </div>
+          <div key={m.id} className="bg-white p-3 rounded shadow flex justify-between items-center">
+            <div><span className={`text-xs px-2 py-0.5 rounded mr-2 ${m.type === 'TRANSMITTER' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800'}`}>{m.type === 'TRANSMITTER' ? '送信機' : 'モニタ'}</span><span className="font-bold">{m.name}</span></div>
             <div className="flex gap-2">
               <button onClick={() => setEditItem(m)} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={18}/></button>
               <button onClick={() => onDelete(m.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={18}/></button>
@@ -1853,18 +1747,18 @@ function DeviceHistoryModal({ db, appId, device, onClose }) {
 
     useEffect(() => {
         const fetchDeviceHistory = async () => {
-            // 過去30日分くらいの履歴を取得（limit(30)）
+            // Remove orderBy and limit to avoid index requirement
             const q = query(
                 collection(db, 'artifacts', appId, 'public', 'data', 'checks'),
-                where('deviceId', '==', device.id),
-                orderBy('date', 'desc'),
-                limit(30)
+                where('deviceId', '==', device.id)
             );
             
             try {
                 const snapshot = await getDocs(q);
                 const list = snapshot.docs.map(d => d.data());
-                setRecords(list);
+                // Sort in memory (descending date)
+                list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                setRecords(list.slice(0, 30)); // Limit to latest 30 locally
             } catch (e) {
                 console.error("Error fetching device history:", e);
             } finally {
