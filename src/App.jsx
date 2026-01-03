@@ -1321,6 +1321,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
 
   useEffect(() => {
     const fetchHistory = async () => {
+      // 履歴データの取得
       const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'));
       const snapshot = await getDocs(q);
       const list = snapshot.docs.map(d => d.data());
@@ -1332,6 +1333,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
     fetchHistory();
   }, [db, appId]);
 
+  // 表示用にフィルタリングされたレコード
   const filteredRecords = useMemo(() => {
     return historyRecords.filter(r => {
       if (filterMode === 'ISSUES') {
@@ -1353,13 +1355,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
     });
   }, [historyRecords, filterMode, searchTerm]);
 
-  const stats = useMemo(() => {
-    const total = historyRecords.length;
-    if (total === 0) return null;
-    const inUseCount = historyRecords.filter(r => r.inUse === 'YES').length;
-    const issueCount = historyRecords.filter(r => r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG').length;
-    return { total, utilization: Math.round((inUseCount / total) * 100), issueRate: Math.round((issueCount / total) * 100), issueCount };
-  }, [historyRecords]);
+  // ★以前の全体統計(stats)は削除し、日付ごとの計算に切り替えます
 
   // マスタ情報を使ってソート順を決定するヘルパー
   const getDeviceSortOrder = (deviceId) => {
@@ -1437,14 +1433,13 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
   // 最新の日付を初期展開
   useEffect(() => {
     if (Object.keys(displayStructure).length > 0) {
-        // キーは日付文字列（YYYY-MM-DDなど）だが、ソート順はgroupedHistory作成時に保証されていないため、念のためソートして最新を取得
-        // ただし、groupedHistoryのキー取得順序はブラウザ依存もあるが、今回は日付降順で表示したい
+        // キーは日付文字列（YYYY-MM-DDなど）
         const sortedDates = Object.keys(displayStructure).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
         if (sortedDates.length > 0) {
             setExpandedDates(prev => ({ ...prev, [sortedDates[0]]: true }));
         }
     }
-  }, [displayStructure]); // displayStructureが変わったとき（初回ロード時含む）に実行
+  }, [displayStructure]); 
 
   // 受信不良の理由コードを日本語に変換するマップ
   const receptionReasonMap = { 
@@ -1465,24 +1460,17 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
 
   // 月報CSV出力
   const handleExportMonthly = (monthStr) => {
-      // monthStr: "YYYY-MM"
       if (!monthStr) return;
       
-      // 対象月のデータを抽出
-      // recordsはhistoryRecordsから
       const targetRecords = historyRecords.filter(r => r.date.startsWith(monthStr));
       
-      // 日付のリストを生成 (1日〜31日)
       const year = parseInt(monthStr.split('-')[0]);
       const month = parseInt(monthStr.split('-')[1]);
       const lastDay = new Date(year, month, 0).getDate();
       const days = Array.from({length: lastDay}, (_, i) => i + 1);
       
-      // ヘッダー作成
       const header = ['病棟', 'モニタ', 'ch', '型番', ...days.map(d => `${d}日`)];
       
-      // データ行の作成（マスタ順に全デバイスを表示）
-      // まず全デバイスをマスタ順にソート
       const sortedDevices = [...devices].sort((a, b) => {
          const wa = getWardSortOrder(a.ward);
          const wb = getWardSortOrder(b.ward);
@@ -1494,7 +1482,6 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
       });
 
       const rows = sortedDevices.map(device => {
-          // このデバイスの対象月のレコードを日付でマップ化
           const deviceRecords = targetRecords.filter(r => r.deviceId === device.id);
           const recordsByDay = {};
           deviceRecords.forEach(r => {
@@ -1502,7 +1489,6 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
               recordsByDay[d] = r;
           });
 
-          // 各日のセル値を生成
           const dayCells = days.map(d => {
               const r = recordsByDay[d];
               if (!r) return '';
@@ -1548,13 +1534,9 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
           <button onClick={onClose}><X size={20}/></button>
         </div>
         <div className="p-4 border-b bg-gray-50 flex flex-col gap-4">
-           {/* Top Stats */}
-           {stats && (
-            <div className="flex gap-4 text-sm justify-end">
-              <div className="bg-blue-50 px-3 py-1 rounded border border-blue-200"><span className="text-gray-500 text-xs block">稼働率</span><span className="font-bold text-lg text-blue-700">{stats.utilization}%</span></div>
-              <div className="bg-red-50 px-3 py-1 rounded border border-red-200"><span className="text-gray-500 text-xs block">不具合件数</span><span className="font-bold text-lg text-red-700">{stats.issueCount}件</span></div>
-            </div>
-          )}
+           {/* ★以前ここに表示していたTop Statsは削除しました。
+              代わりに各日付の行に内包しています。
+           */}
           
           <div className="flex flex-wrap gap-4 items-center justify-between">
             <div className="flex bg-white rounded-lg border p-1 shadow-sm">
@@ -1581,9 +1563,19 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
               {sortedDateKeys.length === 0 && <div className="text-center p-10 text-gray-400">該当するデータがありません</div>}
               {sortedDateKeys.map((date) => {
                 const wardsData = displayStructure[date];
+                // 担当者の抽出
                 const checkers = Array.from(new Set(
                     wardsData.flatMap(w => w.monitors.flatMap(m => m.records.map(r => r.checker)))
                 )).filter(Boolean).join(', ');
+
+                // ★日ごとの統計計算
+                // 表示フィルタリングに関わらず、その日の全データから計算するため historyRecords を使用
+                const dailyRawRecords = historyRecords.filter(r => r.date === date);
+                const dailyTotal = dailyRawRecords.length;
+                const dailyInUse = dailyRawRecords.filter(r => r.inUse === 'YES').length;
+                const dailyIssues = dailyRawRecords.filter(r => r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG').length;
+                // 稼働率 (使用中 / 全点検数)
+                const dailyUtilization = dailyTotal > 0 ? Math.round((dailyInUse / dailyTotal) * 100) : 0;
 
                 return (
                 <div key={date} className="bg-white rounded-lg shadow border border-gray-200 overflow-hidden">
@@ -1595,8 +1587,21 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
                         <div className="flex items-center gap-2 font-bold text-gray-700 text-lg"><Calendar size={20}/> {date}</div>
                         {checkers && <div className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100 flex items-center gap-1"><User size={12}/> {checkers}</div>}
                     </div>
-                    <div className="flex items-center gap-2">
-                        {/* 修正: 日付行のCSVボタンは削除 */}
+                    
+                    {/* ★ここに日ごとの統計情報を追加 */}
+                    <div className="flex items-center gap-4">
+                        {dailyTotal > 0 && (
+                            <div className="flex gap-2">
+                                <div className="bg-blue-50 px-3 py-1 rounded border border-blue-200 flex flex-col items-center leading-none min-w-[60px]">
+                                    <span className="text-[10px] text-gray-500 mb-0.5">稼働率</span>
+                                    <span className="font-bold text-sm text-blue-700">{dailyUtilization}%</span>
+                                </div>
+                                <div className="bg-red-50 px-3 py-1 rounded border border-red-200 flex flex-col items-center leading-none min-w-[60px]">
+                                    <span className="text-[10px] text-gray-500 mb-0.5">不具合</span>
+                                    <span className="font-bold text-sm text-red-700">{dailyIssues}件</span>
+                                </div>
+                            </div>
+                        )}
                         {expandedDates[date] ? <ChevronUp size={20} className="text-gray-400"/> : <ChevronDown size={20} className="text-gray-400"/>}
                     </div>
                   </div>
@@ -1680,7 +1685,6 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
           <CSVExportModal 
             onClose={() => setShowExportModal(false)}
             onExportDaily={(date) => {
-                // historyRecords から対象日のデータを探す
                 const targets = historyRecords.filter(r => r.date === date);
                 if(targets.length === 0) return alert('該当日のデータがありません');
                 onDownloadCSV(targets, date);
