@@ -688,13 +688,13 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
             )}
         </div>
 
-        {/* 保存 (New) */}
-        <button onClick={handleSave} className="col-span-1 py-4 bg-green-500 text-white rounded-xl flex justify-center items-center hover:bg-green-600 active:scale-95 transition-all shadow-sm">
+        {/* 保存 (New) - 青色に変更 */}
+        <button onClick={handleSave} className="col-span-1 py-4 bg-blue-500 text-white rounded-xl flex justify-center items-center hover:bg-blue-600 active:scale-95 transition-all shadow-sm">
             <Save size={24}/>
         </button>
         
-        {/* 次へ */}
-        <button onClick={handleSaveAndNext} disabled={isLast} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all shadow-sm ${isLast ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-95'}`}>
+        {/* 次へ - 「戻る」と同じ配色に変更 */}
+        <button onClick={handleSaveAndNext} disabled={isLast} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all ${isLast ? 'bg-gray-100 text-gray-300 cursor-not-allowed' : 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-95'}`}>
             <ArrowRight size={24}/>
         </button>
       </div>
