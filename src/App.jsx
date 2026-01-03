@@ -4,7 +4,7 @@ import {
   Activity, Filter, MapPin, Monitor, Settings, User, Plus, Trash2, Edit2, 
   History, LogOut, FileText, ChevronDown, ChevronUp, ArrowRight, ArrowLeft,
   Server, Grid, Layers, Menu, BarChart2, Calendar, AlertOctagon, HelpCircle,
-  Cloud, Clock, FastForward, MessageSquare, ArrowUp, ArrowDown, Info
+  Cloud, Clock, FastForward, MessageSquare, ArrowUp, ArrowDown, Info, LogIn
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -33,7 +33,6 @@ const db = getFirestore(app);
 const appId = 'checklist-app-v1';
 
 // Helper: 日付フォーマット統一 (YYYY-MM-DD)
-// toLocaleDateStringは環境依存があるため、手動で組み立てる
 const getTodayString = (dateObj = new Date()) => {
   const y = dateObj.getFullYear();
   const m = ('0' + (dateObj.getMonth() + 1)).slice(-2);
@@ -52,20 +51,18 @@ function App() {
   const [records, setRecords] = useState({});
 
   const [selectedWard, setSelectedWard] = useState(null);
-  // selectedDevice: 現在展開中（編集モード）のデバイスIDを保持
   const [selectedDevice, setSelectedDevice] = useState(null); 
-  // historyTargetDevice: 個別履歴を表示する対象のデバイス
   const [historyTargetDevice, setHistoryTargetDevice] = useState(null);
 
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showConfirmSave, setShowConfirmSave] = useState(false);
   
-  // 時計用のstate
   const [currentTime, setCurrentTime] = useState(new Date());
 
-  // 修正: 統一された日付フォーマットを使用
-  const today = getTodayString();
+  // 修正: アプリ起動時（またはリロード時）の日付で固定し、データ保存とクエリの日付を一致させる
+  // これにより、日付を跨いで作業してもリストから消えることを防ぐ
+  const today = useMemo(() => getTodayString(), []);
 
   // 時計の更新
   useEffect(() => {
@@ -89,28 +86,24 @@ function App() {
   useEffect(() => {
     if (!user) return;
     
-    // 1. Devices
     const unsubDevices = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'devices'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999) || a.id.localeCompare(b.id));
       setDevices(list);
     }, (error) => console.error("Device sync error", error));
 
-    // 2. Staff (Updated sort)
     const unsubStaff = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'staff'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
       setStaffList(list);
     }, (error) => console.error("Staff sync error", error));
 
-    // 3. Models (Updated sort)
     const unsubModels = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'transmitter_models'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
       setTransmitterModels(list);
     }, (error) => console.error("Models sync error", error));
 
-    // 4. Wards (病棟マスタ・順序)
     const unsubWards = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'wards'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
@@ -118,7 +111,7 @@ function App() {
     }, (error) => console.error("Wards sync error", error));
 
     // 5. Checks
-    // todayの値が統一されたため、クエリが正確になる
+    // 依存配列に today を含め、日付が変わった場合（リロード等）に正しくクエリするようにする
     const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'), where('date', '==', today));
     const unsubChecks = onSnapshot(q, (snapshot) => {
       const recs = {};
@@ -127,7 +120,7 @@ function App() {
     }, (error) => console.error("Checks sync error", error));
 
     return () => { unsubDevices(); unsubStaff(); unsubModels(); unsubWards(); unsubChecks(); };
-  }, [user]);
+  }, [user, today]);
   
   // --- Helpers ---
   const wards = useMemo(() => {
@@ -142,12 +135,6 @@ function App() {
       const orderB = wb ? (wb.sortOrder ?? 9999) : 9999;
       
       if (orderA !== orderB) return orderA - orderB;
-
-      // Fallback (DB未登録時のデフォルト順)
-      const defaultOrder = ['3A病棟', '4F病棟', '2F病棟', '3F透析室', '君津1FHD', '坂田HD'];
-      const indexA = defaultOrder.indexOf(a);
-      const indexB = defaultOrder.indexOf(b);
-      if (indexA !== -1 && indexB !== -1) return indexA - indexB;
       return a.localeCompare(b);
     });
   }, [devices, wardList]);
@@ -155,7 +142,6 @@ function App() {
   const filteredDevices = useMemo(() => {
     let list = devices;
     if (selectedWard) list = list.filter(d => d.ward === selectedWard);
-    // 検索機能削除に伴い、ここでのフィルタリングも削除
     return list;
   }, [selectedWard, devices]); 
 
@@ -169,14 +155,22 @@ function App() {
     return groups;
   }, [selectedWard, filteredDevices]);
 
-  // 全体の進捗率 (病棟選択画面用)
   const totalProgress = useMemo(() => {
     if (devices.length === 0) return 0;
     const checkedCount = Object.keys(records).length;
     return Math.round((checkedCount / devices.length) * 100);
   }, [devices, records]);
 
-  // CSV出力
+  // 次の病棟を取得するロジック
+  const nextWard = useMemo(() => {
+      if (!selectedWard) return null;
+      const currentIndex = wards.indexOf(selectedWard);
+      if (currentIndex >= 0 && currentIndex < wards.length - 1) {
+          return wards[currentIndex + 1];
+      }
+      return null;
+  }, [selectedWard, wards]);
+
   const handleDownloadCSV = (targetRecords, fileNameDate) => {
     const list = Array.isArray(targetRecords) ? targetRecords : Object.values(targetRecords);
     const header = ['点検日', '時間', '病棟', '点検者', 'モニタ', 'ch', '送信機型番', '①使用中', '②受信状態', '不良理由', '備考', '③破損', '④ch確認'];
@@ -215,23 +209,19 @@ function App() {
     setShowConfirmSave(false);
   };
 
-  // デバイスの展開切り替え処理
   const toggleDevice = (device) => {
     if (selectedDevice && selectedDevice.id === device.id) {
-      setSelectedDevice(null); // 同じものをタップしたら閉じる
+      setSelectedDevice(null);
     } else {
       setSelectedDevice(device);
     }
   };
 
-  // 個別履歴表示
   const handleShowDeviceHistory = (device) => {
       setHistoryTargetDevice(device);
   };
 
-  // 保存処理 (インラインフォームから呼ばれる)
   const handleSaveRecord = async (record, action = 'CLOSE') => {
-    // inUseがnull（未入力）の場合は保存をスキップする
     if (record.inUse !== null) {
         const deviceMaster = devices.find(d => d.id === record.deviceId);
         if(deviceMaster) {
@@ -358,10 +348,11 @@ function App() {
                             onToggle={() => toggleDevice(device)}
                             onSave={handleSaveRecord}
                             onDelete={handleDeleteRecord}
-                            onShowHistory={() => handleShowDeviceHistory(device)} // 追加
+                            onShowHistory={() => handleShowDeviceHistory(device)} 
                             checker={currentStaff}
                             isFirst={filteredDevices.length > 0 && filteredDevices[0].id === device.id}
                             isLast={filteredDevices.length > 0 && filteredDevices[filteredDevices.length - 1].id === device.id}
+                            date={today} // 修正: 固定した日付を渡す
                           />
                         ))}
                       </div>
@@ -378,15 +369,31 @@ function App() {
                             onToggle={() => toggleDevice(device)}
                             onSave={handleSaveRecord}
                             onDelete={handleDeleteRecord}
-                            onShowHistory={() => handleShowDeviceHistory(device)} // 追加
+                            onShowHistory={() => handleShowDeviceHistory(device)} 
                             checker={currentStaff}
                             isFirst={filteredDevices.length > 0 && filteredDevices[0].id === device.id}
                             isLast={filteredDevices.length > 0 && filteredDevices[filteredDevices.length - 1].id === device.id}
+                            date={today} // 修正: 固定した日付を渡す
                         />
                     ))}
                   </div>
                 )}
                 {filteredDevices.length === 0 && <div className="text-center py-10 text-gray-400 text-sm">該当する機器が見つかりません</div>}
+                
+                {/* 修正: リスト最下部に追加のナビゲーション */}
+                <div className="pt-4 pb-8 border-t border-dashed border-gray-300">
+                    <div className="flex gap-4">
+                        <button onClick={() => setSelectedWard(null)} className="flex-1 py-4 bg-gray-200 text-gray-600 font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-gray-300 transition-colors">
+                           <ArrowLeft size={20} /> 病棟選択に戻る
+                        </button>
+                        {nextWard && (
+                            <button onClick={() => { setSelectedWard(nextWard); window.scrollTo({top: 0, behavior: 'smooth'}); }} className="flex-1 py-4 bg-blue-100 text-blue-700 font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-blue-200 transition-colors">
+                                次の病棟へ <ArrowRight size={20} />
+                            </button>
+                        )}
+                    </div>
+                </div>
+
               </div>
             </div>
           )}
@@ -404,6 +411,20 @@ function App() {
             <button onClick={() => setShowConfirmSave(true)} className="flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-lg font-bold shadow hover:bg-blue-700 active:scale-95 transition-transform">
               <CheckCircle size={20} /> 本日の点検完了
             </button>
+          </div>
+        </div>
+      )}
+      
+      {/* Footer (病棟選択中) - 修正: 一覧に戻るボタンを追加 */}
+      {selectedWard && (
+        <div className="bg-white p-4 border-t sticky bottom-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] safe-area-bottom z-10">
+          <div className="max-w-3xl mx-auto flex justify-between items-center">
+             <button onClick={() => setSelectedWard(null)} className="flex items-center gap-1 text-gray-500 font-bold hover:text-gray-700">
+                <ChevronDown size={20} className="rotate-90"/> 一覧に戻る
+             </button>
+             <div className="text-xs text-gray-400">
+                {Object.keys(records).length}件 完了
+             </div>
           </div>
         </div>
       )}
@@ -442,7 +463,7 @@ function App() {
 // --- Sub Components ---
 
 // DeviceRow: 展開状態（isExpanded）に応じてインラインフォームを表示
-function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onShowHistory, checker, isFirst, isLast }) {
+function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onShowHistory, checker, isFirst, isLast, date }) { // date 追加
   const isChecked = !!record;
   const rowRef = useRef(null);
   
@@ -516,7 +537,8 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onS
                 onSave={onSave}
                 onDelete={onDelete}
                 isFirst={isFirst} 
-                isLast={isLast}   
+                isLast={isLast}
+                date={date} // date 追加
             />
         </div>
       )}
@@ -525,7 +547,7 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onS
 }
 
 // CheckInlineForm: モーダルの中身をインライン用に調整したコンポーネント
-function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDelete, isFirst, isLast }) {
+function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDelete, isFirst, isLast, date }) { // date 追加
   const [inUse, setInUse] = useState(initialData?.inUse || null);
   const [reception, setReception] = useState(initialData?.reception || 'GOOD');
   const [receptionReason, setReceptionReason] = useState(initialData?.receptionReason || 'A');
@@ -556,10 +578,10 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
   }, [inUse]);
 
   const createRecord = () => {
-    // 修正: 統一された日付フォーマットを使用
+    // 修正: 親コンポーネントから渡された固定日付(date)を使用する
     return {
       deviceId: device.id, ward: device.ward,
-      date: getTodayString(),
+      date: date, // 変更: getTodayString() から props.date へ
       timestamp: new Date().toLocaleString('ja-JP'), checker: checker || '',
       inUse, reception: inUse === 'YES' ? reception : '-',
       receptionReason: (inUse === 'YES' && reception === 'BAD') ? receptionReason : null,
