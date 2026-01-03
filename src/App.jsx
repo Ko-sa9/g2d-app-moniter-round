@@ -126,7 +126,6 @@ function App() {
     }, (error) => console.error("Device sync error", error));
 
     // 2. Staff (担当者マスタ)
-    // 修正: sortOrder順にソートするよう修正
     const unsubStaff = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'staff'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
@@ -134,8 +133,10 @@ function App() {
     }, (error) => console.error("Staff sync error", error));
 
     // 3. Models (型番マスタ)
+    // 修正: sortOrder順にソートするよう修正
     const unsubModels = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'transmitter_models'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
+      list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
       setTransmitterModels(list);
     }, (error) => console.error("Models sync error", error));
 
@@ -1376,22 +1377,81 @@ function StaffMasterEditor({ list, onSave, onDelete }) {
   );
 }
 
-// TransmitterModelEditor: 型番編集画面
+// TransmitterModelEditor: 型番編集画面 (DnD対応)
 function TransmitterModelEditor({ list, onSave, onDelete }) {
   const [formData, setFormData] = useState({ id: '', name: '', type: 'TRANSMITTER' });
   const [editItem, setEditItem] = useState(null);
+  const [draggedItem, setDraggedItem] = useState(null);
+  const touchItemRef = useRef(null);
 
   useEffect(() => {
     if (editItem) setFormData(editItem);
     else setFormData({ id: '', name: '', type: 'TRANSMITTER' });
   }, [editItem]);
 
+  // 新規追加・更新処理 (sortOrder付与)
   const handleSubmit = async () => {
-    const itemToSave = editItem ? formData : { ...formData, id: formData.name }; 
+    // 新規追加時はformData、編集時はeditItemをベースにするが、IDは変更不可
+    const itemToSave = editItem ? { ...formData } : { ...formData, id: formData.name }; 
+    
+    // 新規追加時のsortOrder自動採番
+    if (!itemToSave.sortOrder && !editItem) {
+        const maxSort = list.length > 0 ? Math.max(...list.map(m => m.sortOrder || 0)) : 0;
+        itemToSave.sortOrder = maxSort + 1;
+    }
+
     await onSave(itemToSave);
     setFormData({ id: '', name: '', type: 'TRANSMITTER' });
     setEditItem(null);
   };
+
+  // DnD Handlers
+  const handleDragStart = (e, item) => {
+      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+          e.preventDefault();
+          return;
+      }
+      setDraggedItem(item);
+      if ('dataTransfer' in e) e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = async (e, targetItem) => {
+      e.preventDefault();
+      if (!draggedItem || draggedItem.id === targetItem.id) return;
+      
+      const batch = writeBatch(db);
+      const draggedOrder = draggedItem.sortOrder ?? 0;
+      const targetOrder = targetItem.sortOrder ?? 0;
+      
+      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', draggedItem.id), { sortOrder: targetOrder });
+      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', targetItem.id), { sortOrder: draggedOrder });
+      
+      await batch.commit();
+      setDraggedItem(null);
+  };
+
+  // Touch Handlers for Mobile
+  const handleTouchStart = (e, item) => { touchItemRef.current = item; };
+  const handleTouchMove = (e) => {};
+  const handleTouchEnd = async (e) => {
+    const changedTouch = e.changedTouches[0];
+    const elem = document.elementFromPoint(changedTouch.clientX, changedTouch.clientY);
+    const targetRow = elem?.closest('[data-model-id]');
+    if (targetRow && touchItemRef.current) {
+      const targetId = targetRow.getAttribute('data-model-id');
+      if (targetId && targetId !== touchItemRef.current.id) {
+        const targetModel = list.find((m) => m.id === targetId);
+        if (targetModel) await handleDrop({ preventDefault: () => {} }, targetModel);
+      }
+    }
+    touchItemRef.current = null;
+  };
+
 
   return (
     <div className="space-y-4">
@@ -1409,8 +1469,22 @@ function TransmitterModelEditor({ list, onSave, onDelete }) {
       </div>
       <div className="space-y-2">
         {list.map(m => (
-          <div key={m.id} className="bg-white p-3 rounded shadow flex justify-between items-center">
-            <div><span className={`text-xs px-2 py-0.5 rounded mr-2 ${m.type === 'TRANSMITTER' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800'}`}>{m.type === 'TRANSMITTER' ? '送信機' : 'モニタ'}</span><span className="font-bold">{m.name}</span></div>
+          <div 
+            key={m.id} 
+            data-model-id={m.id}
+            className="bg-white p-3 rounded shadow flex justify-between items-center cursor-move active:bg-blue-50 active:opacity-80"
+            draggable="true"
+            onDragStart={(e) => handleDragStart(e, m)}
+            onDragOver={handleDragOver}
+            onDrop={(e) => handleDrop(e, m)}
+            onTouchStart={(e) => handleTouchStart(e, m)} 
+            onTouchMove={handleTouchMove} 
+            onTouchEnd={handleTouchEnd}
+          >
+            <div className="flex items-center gap-3 pointer-events-none">
+                <Menu size={16} className="text-gray-400"/>
+                <div><span className={`text-xs px-2 py-0.5 rounded mr-2 ${m.type === 'TRANSMITTER' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800'}`}>{m.type === 'TRANSMITTER' ? '送信機' : 'モニタ'}</span><span className="font-bold">{m.name}</span></div>
+            </div>
             <div className="flex gap-2">
               <button onClick={() => setEditItem(m)} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={18}/></button>
               <button onClick={() => onDelete(m.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={18}/></button>
