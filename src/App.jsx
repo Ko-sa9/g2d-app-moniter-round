@@ -32,6 +32,15 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = 'checklist-app-v1';
 
+// Helper: 日付フォーマット統一 (YYYY-MM-DD)
+// toLocaleDateStringは環境依存があるため、手動で組み立てる
+const getTodayString = (dateObj = new Date()) => {
+  const y = dateObj.getFullYear();
+  const m = ('0' + (dateObj.getMonth() + 1)).slice(-2);
+  const d = ('0' + dateObj.getDate()).slice(-2);
+  return `${y}-${m}-${d}`;
+};
+
 function App() {
   const [user, setUser] = useState(null);
   const [currentStaff, setCurrentStaff] = useState('');
@@ -55,7 +64,8 @@ function App() {
   // 時計用のstate
   const [currentTime, setCurrentTime] = useState(new Date());
 
-  const today = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
+  // 修正: 統一された日付フォーマットを使用
+  const today = getTodayString();
 
   // 時計の更新
   useEffect(() => {
@@ -108,6 +118,7 @@ function App() {
     }, (error) => console.error("Wards sync error", error));
 
     // 5. Checks
+    // todayの値が統一されたため、クエリが正確になる
     const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'), where('date', '==', today));
     const unsubChecks = onSnapshot(q, (snapshot) => {
       const recs = {};
@@ -545,9 +556,10 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
   }, [inUse]);
 
   const createRecord = () => {
+    // 修正: 統一された日付フォーマットを使用
     return {
       deviceId: device.id, ward: device.ward,
-      date: new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-'),
+      date: getTodayString(),
       timestamp: new Date().toLocaleString('ja-JP'), checker: checker || '',
       inUse, reception: inUse === 'YES' ? reception : '-',
       receptionReason: (inUse === 'YES' && reception === 'BAD') ? receptionReason : null,
