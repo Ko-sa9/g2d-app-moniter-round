@@ -41,21 +41,25 @@ const getTodayString = (dateObj = new Date()) => {
 };
 
 function App() {
+  // ユーザー認証・担当者情報
   const [user, setUser] = useState(null);
   const [currentStaff, setCurrentStaff] = useState('');
   
+  // マスタデータ群
   const [devices, setDevices] = useState([]);
   const [staffList, setStaffList] = useState([]);
   const [transmitterModels, setTransmitterModels] = useState([]);
-  const [wardList, setWardList] = useState([]); // 病棟マスタ（順序保持用）
-  const [records, setRecords] = useState({});
+  const [wardList, setWardList] = useState([]); // 病棟マスタ（表示順序保持用）
+  const [records, setRecords] = useState({}); // 本日の点検記録
 
+  // UI状態管理
   const [selectedWard, setSelectedWard] = useState(null);
   // selectedDevice: 現在展開中（編集モード）のデバイスIDを保持
   const [selectedDevice, setSelectedDevice] = useState(null); 
   // historyTargetDevice: 個別履歴を表示する対象のデバイス
   const [historyTargetDevice, setHistoryTargetDevice] = useState(null);
 
+  // モーダル表示フラグ
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showConfirmSave, setShowConfirmSave] = useState(false);
@@ -63,16 +67,16 @@ function App() {
   // 時計用のstate
   const [currentTime, setCurrentTime] = useState(new Date());
 
-  // 修正: アプリ起動時（またはリロード時）の日付で固定し、データ保存とクエリの日付を一致させる
+  // アプリ起動時（またはリロード時）の日付で固定し、データ保存とクエリの日付を一致させる
   const today = useMemo(() => getTodayString(), []);
 
-  // 時計の更新
+  // 時計の更新（1秒ごと）
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // 担当者名の永続化と日付変更時のリセット
+  // 担当者名のローカルストレージへの永続化と日付変更時のリセット処理
   useEffect(() => {
       const savedData = localStorage.getItem('g2d_staff_curr');
       if (savedData) {
@@ -96,7 +100,7 @@ function App() {
       }
   }, [currentStaff, today]);
 
-
+  // 匿名認証の初期化
   useEffect(() => {
     const init = async () => {
       try {
@@ -109,39 +113,39 @@ function App() {
     return onAuthStateChanged(auth, setUser);
   }, []);
 
-// Data Sync
+  // Data Sync: Firestoreからのリアルタイムデータ同期
   useEffect(() => {
     if (!user) return;
     
-    // 1. Devices
+    // 1. Devices (機器マスタ)
     const unsubDevices = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'devices'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
+      // sortOrder優先でソート
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999) || a.id.localeCompare(b.id));
       setDevices(list);
     }, (error) => console.error("Device sync error", error));
 
-    // 2. Staff (Updated sort)
+    // 2. Staff (担当者マスタ)
     const unsubStaff = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'staff'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
-      list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
       setStaffList(list);
     }, (error) => console.error("Staff sync error", error));
 
-    // 3. Models (Updated sort)
+    // 3. Models (型番マスタ)
     const unsubModels = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'transmitter_models'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
-      list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
       setTransmitterModels(list);
     }, (error) => console.error("Models sync error", error));
 
     // 4. Wards (病棟マスタ・順序)
     const unsubWards = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'wards'), (snapshot) => {
       const list = snapshot.docs.map(d => d.data());
+      // sortOrder順にソート
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
       setWardList(list);
     }, (error) => console.error("Wards sync error", error));
 
-    // 5. Checks
+    // 5. Checks (本日の点検記録)
     const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'), where('date', '==', today));
     const unsubChecks = onSnapshot(q, (snapshot) => {
       const recs = {};
@@ -152,11 +156,13 @@ function App() {
     return () => { unsubDevices(); unsubStaff(); unsubModels(); unsubWards(); unsubChecks(); };
   }, [user, today]);
   
-  // --- Helpers ---
+  // --- Helpers & Computed Values ---
+  
+  // 病棟リストの生成（マスタの表示順序を反映）
   const wards = useMemo(() => {
     const list = Array.from(new Set(devices.map(d => d.ward)));
     
-    // DBのwardListがある場合はそのsortOrderを優先、なければ従来のハードコード順
+    // DBのwardListがある場合はそのsortOrderを優先
     return list.sort((a, b) => {
       const wa = wardList.find(w => w.name === a);
       const wb = wardList.find(w => w.name === b);
@@ -169,12 +175,14 @@ function App() {
     });
   }, [devices, wardList]);
 
+  // 選択中の病棟でフィルタリングされたデバイスリスト
   const filteredDevices = useMemo(() => {
     let list = devices;
     if (selectedWard) list = list.filter(d => d.ward === selectedWard);
     return list;
   }, [selectedWard, devices]); 
 
+  // モニタグループごとにデバイスをまとめる
   const groupedDevices = useMemo(() => {
     if (!selectedWard) return null; 
     const groups = {};
@@ -185,13 +193,14 @@ function App() {
     return groups;
   }, [selectedWard, filteredDevices]);
 
-  // 全体の進捗率
+  // 全体の進捗率計算
   const totalProgress = useMemo(() => {
     if (devices.length === 0) return 0;
     const checkedCount = Object.keys(records).length;
     return Math.round((checkedCount / devices.length) * 100);
   }, [devices, records]);
 
+  // CSVダウンロード処理
   const handleDownloadCSV = (targetRecords, fileNameDate) => {
     const list = Array.isArray(targetRecords) ? targetRecords : Object.values(targetRecords);
     const header = ['点検日', '時間', '病棟', '点検者', 'モニタ', 'ch', '送信機型番', '①使用中', '②受信状態', '不良理由', '備考', '③破損', '④ch確認'];
@@ -244,7 +253,7 @@ function App() {
       setHistoryTargetDevice(device);
   };
 
-  // 保存処理 (インラインフォームから呼ばれる)
+  // 点検記録の保存処理 (インラインフォームから呼ばれる)
   const handleSaveRecord = async (record, action = 'CLOSE') => {
     // inUseがnull（未入力）の場合は保存をスキップする
     if (record.inUse !== null) {
@@ -261,6 +270,7 @@ function App() {
         }
     }
 
+    // 次へ/前へボタンのアクション処理
     if (action === 'NEXT' || action === 'PREV') {
         const currentIndex = filteredDevices.findIndex(d => d.id === record.deviceId);
         if (action === 'NEXT') {
@@ -279,6 +289,7 @@ function App() {
     }
   };
 
+  // 点検記録の削除処理
   const handleDeleteRecord = async (record) => {
     if(confirm('この点検記録を取り消しますか？\nデータは削除され「未実施」に戻ります。')) {
       const docId = `${record.date}_${record.deviceId}`;
@@ -291,7 +302,7 @@ function App() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-50 text-gray-800 font-sans">
-      {/* Header */}
+      {/* Header Area */}
       <header className="bg-blue-600 text-white p-3 shadow-md sticky top-0 z-10">
         <div className="max-w-3xl mx-auto w-full flex flex-col gap-2">
           <div className="flex justify-between items-center">
@@ -320,10 +331,11 @@ function App() {
         </div>
       </header>
 
-      {/* Main */}
+      {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto p-4">
         <div className="max-w-3xl mx-auto w-full space-y-6">
           {!selectedWard ? (
+            // 病棟選択画面
             <div className="space-y-4 animate-fade-in">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2"><MapPin size={18} className="text-blue-600" /><h2 className="text-md font-bold text-gray-700">病棟を選択してください</h2></div>
@@ -350,14 +362,16 @@ function App() {
               </div>
             </div>
           ) : (
+            // 機器リスト表示画面（病棟選択後）
             <div className="space-y-4 animate-slide-up">
-              <div className="flex justify-between items-center">
-                <button onClick={() => setSelectedWard(null)} className="text-sm text-blue-600 hover:underline flex items-center gap-1 pl-1"><ChevronRight size={16} className="rotate-180" /> 病棟選択に戻る</button>
+              {/* ナビゲーションヘッダ：戻るボタン削除、現在の病棟名を表示 */}
+              <div className="flex justify-end items-center">
                 <div className="text-sm font-bold bg-white px-3 py-1 rounded-full shadow-sm border text-gray-600">{selectedWard}</div>
               </div>
               
               <div className="space-y-6 pb-24">
                 {groupedDevices ? (
+                  // モニタごとにグルーピングして表示
                   Object.entries(groupedDevices).map(([groupName, groupDevices]) => (
                     <div key={groupName} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                       <div className="bg-gray-100 px-4 py-2 border-b border-gray-200 flex items-center gap-2">
@@ -384,6 +398,7 @@ function App() {
                     </div>
                   ))
                 ) : (
+                  // グルーピングなし（基本的にはここは通らないが念のため）
                   <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden divide-y divide-gray-100">
                     {filteredDevices.map(device => (
                         <DeviceRow 
@@ -405,28 +420,20 @@ function App() {
                 )}
                 {filteredDevices.length === 0 && <div className="text-center py-10 text-gray-400 text-sm">該当する機器が見つかりません</div>}
                 
-                {/* リスト最下部に追加のナビゲーション */}
-                <div className="pt-4 pb-8 border-t border-dashed border-gray-300">
-                    <button 
-                        onClick={() => { setSelectedWard(null); window.scrollTo({top: 0, behavior: 'smooth'}); }} 
-                        className="w-full py-4 bg-blue-100 text-blue-700 font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-blue-200 transition-colors shadow-sm"
-                    >
-                        <Grid size={20} /> 次の病棟を選ぶ
-                    </button>
-                </div>
-
+                {/* 削除: 下部にあった「次の病棟を選ぶ」ボタンのブロックは削除済み */}
               </div>
             </div>
           )}
         </div>
       </main>
       
-      {/* Footer (病棟選択中) */}
+      {/* Footer Navigation (病棟選択中のみ表示) */}
       {selectedWard && (
         <div className="bg-white p-4 border-t sticky bottom-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] safe-area-bottom z-10">
           <div className="max-w-3xl mx-auto flex justify-between items-center">
+             {/* 文言変更: 「一覧に戻る」→「病棟選択に戻る」 */}
              <button onClick={() => setSelectedWard(null)} className="flex items-center gap-1 text-gray-500 font-bold hover:text-gray-700">
-                <ChevronDown size={20} className="rotate-90"/> 一覧に戻る
+                <ChevronDown size={20} className="rotate-90"/> 病棟選択に戻る
              </button>
              <div className="text-xs text-gray-400">
                 {Object.keys(records).length}件 完了
@@ -435,6 +442,7 @@ function App() {
         </div>
       )}
 
+      {/* 確認モーダル */}
       {showConfirmSave && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
           <div className="bg-white w-full max-w-sm rounded-xl shadow-2xl p-6 animate-scale-in">
@@ -449,8 +457,10 @@ function App() {
         </div>
       )}
 
+      {/* 設定モーダル */}
       {showSettings && <SettingsModal devices={devices} staffList={staffList} transmitterModels={transmitterModels} wardList={wardList} onClose={() => setShowSettings(false)} />}
       
+      {/* 履歴・分析モーダル */}
       {showHistory && <HistoryModal db={db} appId={appId} devices={devices} wardList={wardList} onClose={() => setShowHistory(false)} onDownloadCSV={handleDownloadCSV} />}
 
       {/* 個別機器履歴モーダル */}
@@ -468,11 +478,12 @@ function App() {
 
 // --- Sub Components ---
 
-// DeviceRow: 展開状態（isExpanded）に応じてインラインフォームを表示
+// DeviceRow: リストの各行コンポーネント。クリックでインラインフォームを展開。
 function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onShowHistory, checker, isFirst, isLast, date }) {
   const isChecked = !!record;
   const rowRef = useRef(null);
   
+  // 展開時に自動スクロール
   useEffect(() => {
     if (isExpanded && rowRef.current) {
       setTimeout(() => {
@@ -481,6 +492,7 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onS
     }
   }, [isExpanded]);
 
+  // ステータス判定（不具合・備考の有無）
   let hasIssue = false;
   let hasNote = false;
   if (record) {
@@ -489,6 +501,7 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onS
     if (record.note && record.note.trim() !== '') hasNote = true;
   }
 
+  // 背景色決定
   let statusColorClass = 'bg-gray-50'; // 未実施
   if (isChecked) {
       if (hasIssue) statusColorClass = 'bg-red-50';
@@ -552,7 +565,7 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onS
   );
 }
 
-// CheckInlineForm: モーダルの中身をインライン用に調整したコンポーネント
+// CheckInlineForm: 実際の入力フォームコンポーネント
 function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDelete, isFirst, isLast, date }) {
   const [inUse, setInUse] = useState(initialData?.inUse || null);
   const [reception, setReception] = useState(initialData?.reception || 'GOOD');
@@ -562,6 +575,7 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
   const [channelCheck, setChannelCheck] = useState(initialData?.channelCheck || '-');
   const [note, setNote] = useState(initialData?.note || '');
 
+  // 既存データがある場合の初期化
   useEffect(() => {
     setInUse(initialData?.inUse || null);
     setReception(initialData?.reception || 'GOOD');
@@ -572,6 +586,7 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
     setNote(initialData?.note || '');
   }, [initialData]);
 
+  // 使用状況に応じた項目の自動リセット
   useEffect(() => {
     if (inUse === 'YES') {
       setIsBroken('-'); setChannelCheck('-');
@@ -666,7 +681,7 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
         <textarea className="w-full p-3 border rounded-lg text-sm focus:ring-2 focus:ring-blue-300 focus:border-blue-300 focus:outline-none transition-shadow bg-gray-50" rows={2} placeholder="特記事項があれば入力してください..." value={note} onChange={(e) => setNote(e.target.value)} />
       </div>
 
-      {/* ボタン配置の変更: 左から「戻る」「取消」「保存」「次へ」 */}
+      {/* アクションボタン: 左から「戻る」「取消」「保存」「次へ」 */}
       <div className="pt-2 grid grid-cols-4 gap-3">
         {/* 戻る */}
         <button onClick={handleSaveAndPrev} disabled={isFirst} className={`col-span-1 py-4 rounded-xl flex justify-center items-center transition-all ${isFirst ? 'bg-gray-100 text-gray-300 cursor-not-allowed' : 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-95'}`}>
@@ -698,6 +713,7 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
   );
 }
 
+// SelectionButton: チェックボックス代わりの選択ボタン
 function SelectionButton({ label, selected, onClick, color, icon }) {
   const baseStyle = "py-3.5 rounded-xl font-bold text-sm transition-all border flex justify-center items-center gap-2 relative overflow-hidden";
   let colorStyle = "";
@@ -719,11 +735,12 @@ function SelectionButton({ label, selected, onClick, color, icon }) {
 }
 
 // --------------------------------------------------------------------------------------
-// SettingsModal (Complete)
+// SettingsModal: マスタ管理モーダル
 // --------------------------------------------------------------------------------------
 function SettingsModal({ devices, staffList, transmitterModels, wardList, onClose }) {
   const [activeTab, setActiveTab] = useState('DEVICE');
   
+  // 機器マスタ保存・削除
   const handleSaveDevice = async (device) => {
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'devices', device.id), device);
   };
@@ -731,6 +748,7 @@ function SettingsModal({ devices, staffList, transmitterModels, wardList, onClos
     if(confirm('本当に削除しますか？')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'devices', id));
   };
 
+  // スタッフマスタ保存・削除
   const handleSaveStaff = async (staff) => {
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'staff', staff.id), staff);
   };
@@ -738,6 +756,7 @@ function SettingsModal({ devices, staffList, transmitterModels, wardList, onClos
     if(confirm('本当に削除しますか？')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'staff', id));
   };
 
+  // 型番マスタ保存・削除
   const handleSaveModel = async (model) => {
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', model.id), model);
   };
@@ -773,7 +792,7 @@ function SettingsModal({ devices, staffList, transmitterModels, wardList, onClos
   );
 }
 
-// DeviceMasterEditor (With DnD, Monitor Edit, Bulk Add)
+// DeviceMasterEditor: 機器マスタ編集（ドラッグ&ドロップ並び替え、一括追加機能付き）
 function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
   const [addMode, setAddMode] = useState(null);
   const [addStep, setAddStep] = useState(1);
@@ -802,13 +821,28 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     }
   }, [transmitterModelsList]);
 
+  // リストのソートとフィルタリング
   const displayList = useMemo(() => {
     let sorted = [...list].sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
     if (!filterText) return sorted;
     return sorted.filter((d) => d.id.includes(filterText) || d.monitorGroup.includes(filterText) || d.ward.includes(filterText));
   }, [list, filterText]);
 
-  const allWards = useMemo(() => Array.from(new Set(list.map((d) => d.ward))), [list]);
+  // ★修正: 機器追加時の病棟リストをマスタ順(wardListのsortOrder)にソート
+  const allWards = useMemo(() => {
+    const uniqueWards = Array.from(new Set(list.map((d) => d.ward)));
+    
+    return uniqueWards.sort((a, b) => {
+      const wa = wardList.find(w => w.name === a);
+      const wb = wardList.find(w => w.name === b);
+      
+      const orderA = wa ? (wa.sortOrder ?? 9999) : 9999;
+      const orderB = wb ? (wb.sortOrder ?? 9999) : 9999;
+      
+      if (orderA !== orderB) return orderA - orderB;
+      return a.localeCompare(b);
+    });
+  }, [list, wardList]);
 
   const getMonitorsByWard = (ward) => {
     const wardDevices = list.filter((d) => d.ward === ward);
@@ -817,6 +851,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
 
   const toggleWard = (ward) => setExpandedWards(prev => ({ ...prev, [ward]: !prev[ward] }));
 
+  // 新規追加フロー開始
   const startFlow = (mode) => {
     setNewDeviceBase({ ward: '', monitorGroup: '' });
     const defaultModel = transmitterModelsList.length > 0 ? transmitterModelsList[0].name : '';
@@ -859,6 +894,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     setDeviceRows(newRows);
   };
 
+  // 新規登録の実行
   const handleCompleteAdd = async () => {
     const validRows = deviceRows.filter(r => r.id.trim() !== '');
     if (validRows.length === 0) return alert('chを1つ以上入力してください');
@@ -881,6 +917,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     }
   };
 
+  // モニタ名変更時の関連デバイス一括更新
   const handleUpdateMonitorName = async () => {
     if (!editingMonitor || !editingMonitor.model || !editingMonitor.serial) return;
     const newName = `${editingMonitor.model} (${editingMonitor.serial})`;
@@ -893,7 +930,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     setEditingMonitor(null);
   };
 
-  // --- Device DnD Handlers ---
+  // --- Device DnD Handlers (機器の並び替え) ---
   const handleDragStart = (e, item) => { 
     if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
       e.preventDefault();
@@ -910,6 +947,8 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     e.preventDefault();
     if (!draggedItem || draggedItem.id === targetItem.id) return;
     if (draggedItem.monitorGroup !== targetItem.monitorGroup) return;
+    
+    // sortOrderを入れ替えて保存
     const batch = writeBatch(db);
     const draggedOrder = draggedItem.sortOrder ?? 0;
     const targetOrder = targetItem.sortOrder ?? 0;
@@ -919,12 +958,9 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     setDraggedItem(null);
   };
 
-  // --- Ward DnD Handlers ---
+  // --- Ward DnD Handlers (病棟の並び替え) ---
   const handleWardDragStart = (e, ward) => {
-    // ボタン等でのドラッグ開始を防止
     if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
-      // ただし、ドラッグハンドルの場合は許可するなどの制御が必要だが、
-      // ここではヘッダー全体をドラッグ可能とし、展開ボタン等は stopPropagation する
     }
     setDraggedWard(ward);
     if ('dataTransfer' in e) e.dataTransfer.effectAllowed = 'move'; 
@@ -934,19 +970,18 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     e.preventDefault();
     if (!draggedWard || draggedWard === targetWardName) return;
 
-    // 現在の表示順（ソート済み）を取得
     const currentOrder = sortedWards;
     const fromIndex = currentOrder.indexOf(draggedWard);
     const toIndex = currentOrder.indexOf(targetWardName);
     
     if (fromIndex === -1 || toIndex === -1) return;
 
-    // 配列を並び替え
+    // 配列操作で順序を変更
     const newOrder = [...currentOrder];
     newOrder.splice(fromIndex, 1);
     newOrder.splice(toIndex, 0, draggedWard);
 
-    // Firestoreに保存 (全病棟の順序を更新)
+    // 全病棟の順序をFirestoreに保存
     const batch = writeBatch(db);
     newOrder.forEach((wardName, index) => {
       batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'wards', wardName), {
@@ -959,6 +994,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     setDraggedWard(null);
   };
   
+  // タッチデバイス用DnD処理 (Device)
   const touchItemRef = useRef(null);
   const handleTouchStart = (e, item) => { touchItemRef.current = item; };
   const handleTouchMove = (e) => {};
@@ -976,7 +1012,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     touchItemRef.current = null;
   };
 
-  // 病棟タッチ操作ハンドラ
+  // タッチデバイス用DnD処理 (Ward)
   const handleWardTouchStart = (e, ward) => {
       touchWardRef.current = ward;
   };
@@ -994,6 +1030,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
       touchWardRef.current = null;
   };
   
+  // 病棟 > モニタ > 機器 の階層データ生成
   const devicesByWardAndMonitor = useMemo(() => {
     const wardGroups = {};
     displayList.forEach((d) => {
@@ -1004,7 +1041,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     return wardGroups;
   }, [displayList]);
 
-  // 病棟の表示順を決定
+  // マスタ順序に基づいた病棟リスト生成
   const sortedWards = useMemo(() => {
     const presentWards = Object.keys(devicesByWardAndMonitor);
     return presentWards.sort((a, b) => {
@@ -1019,6 +1056,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     });
   }, [devicesByWardAndMonitor, wardList]);
 
+  // 新規追加モードのレンダリング
   if (addMode) {
     return (
       <div className="bg-white p-6 rounded-lg shadow-lg border border-gray-200">
@@ -1104,6 +1142,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
         {filterText && <button onClick={() => setFilterText('')} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"><X size={18}/></button>}
       </div>
 
+      {/* 機器情報編集モーダル */}
       {editItem && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
           <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md border">
@@ -1122,6 +1161,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
         </div>
       )}
 
+      {/* モニタ情報編集モーダル */}
       {editingMonitor && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
           <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md border">
@@ -1222,7 +1262,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
   );
 }
 
-// StaffMasterEditor
+// StaffMasterEditor: スタッフ編集画面
 function StaffMasterEditor({ list, onSave, onDelete }) {
   const [formData, setFormData] = useState({ id: '', name: '' });
   const [editItem, setEditItem] = useState(null);
@@ -1257,7 +1297,7 @@ function StaffMasterEditor({ list, onSave, onDelete }) {
   );
 }
 
-// TransmitterModelEditor
+// TransmitterModelEditor: 型番編集画面
 function TransmitterModelEditor({ list, onSave, onDelete }) {
   const [formData, setFormData] = useState({ id: '', name: '', type: 'TRANSMITTER' });
   const [editItem, setEditItem] = useState(null);
@@ -1303,14 +1343,15 @@ function TransmitterModelEditor({ list, onSave, onDelete }) {
   );
 }
 
-// 5. HistoryModal (Full Dashboard)
-// 修正: devices, wardListを受け取る
+// --------------------------------------------------------------------------------------
+// HistoryModal: 履歴ダッシュボード
+// --------------------------------------------------------------------------------------
 function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) {
   const [historyRecords, setHistoryRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterMode, setFilterMode] = useState('ALL');
-  const [searchTerm, setSearchTerm] = useState(''); // Added Search state
-  const [showExportModal, setShowExportModal] = useState(false); // CSV出力モーダル表示用
+  const [searchTerm, setSearchTerm] = useState(''); // 検索キーワード
+  const [showExportModal, setShowExportModal] = useState(false); // CSV出力モーダル
   
   const [expandedDates, setExpandedDates] = useState({});
   const [expandedWards, setExpandedWards] = useState({});
@@ -1332,11 +1373,12 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
   // 表示用にフィルタリングされたレコード
   const filteredRecords = useMemo(() => {
     return historyRecords.filter(r => {
+      // 不具合フィルタ
       if (filterMode === 'ISSUES') {
          if (!(r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG')) return false;
       }
       
-      // Search Logic
+      // テキスト検索
       if (searchTerm) {
           const lower = searchTerm.toLowerCase();
           const match = 
@@ -1381,12 +1423,11 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
          if (wa !== wb) return wa - wb;
          
          // 2. 機器順 (sortOrder)
-         // モニタ名でのソートを削除し、機器マスタのsortOrderを優先
          const da = getDeviceSortOrder(a.deviceId);
          const db = getDeviceSortOrder(b.deviceId);
-         if (da !== db) return da - db; // sortOrderに差があればそれで決定
+         if (da !== db) return da - db; 
 
-         // 3. sortOrderが同じ（未設定など）ならID順（ch順）
+         // 3. sortOrderが同じならID順
          return a.deviceId.localeCompare(b.deviceId);
       });
     });
@@ -1394,20 +1435,17 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
     return groups;
   }, [filteredRecords, devices, wardList]);
 
-  // 表示用に階層化されたデータを生成する
-  // 修正: マスタ順(groupedHistory)の並び順を維持したまま構造化する
+  // 表示用に階層化されたデータを生成 (病棟 > モニタ)
   const displayStructure = useMemo(() => {
       const result = {};
       Object.entries(groupedHistory).forEach(([date, records]) => {
-          // records は既にマスタ順（病棟>モニタ>機器）でソート済み
-          
-          // 1. 病棟ごとにグループ化しつつ、出現順（マスタ順）を維持する
+          // 1. 病棟ごとにグループ化しつつ、出現順（マスタ順）を維持
           const wardsOrder = [];
           const wardMap = {};
 
           records.forEach(r => {
               if (!wardMap[r.ward]) {
-                  wardMap[r.ward] = { name: r.ward, monitors: [] }; // monitorsを配列で管理
+                  wardMap[r.ward] = { name: r.ward, monitors: [] };
                   wardsOrder.push(r.ward);
               }
               
@@ -1420,7 +1458,6 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
               monitorGroup.records.push(r);
           });
 
-          // 結果の構築
           result[date] = wardsOrder.map(wardName => {
               const wardData = wardMap[wardName];
               return {
@@ -1438,7 +1475,6 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
   // 最新の日付を初期展開
   useEffect(() => {
     if (Object.keys(displayStructure).length > 0) {
-        // キーは日付文字列（YYYY-MM-DDなど）
         const sortedDates = Object.keys(displayStructure).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
         if (sortedDates.length > 0) {
             setExpandedDates(prev => ({ ...prev, [sortedDates[0]]: true }));
@@ -1463,7 +1499,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
       setExpandedWards(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  // 月報CSV出力
+  // 月報CSV出力処理
   const handleExportMonthly = (monthStr) => {
       if (!monthStr) return;
       
@@ -1539,10 +1575,6 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
           <button onClick={onClose}><X size={20}/></button>
         </div>
         <div className="p-4 border-b bg-gray-50 flex flex-col gap-4">
-           {/* ★以前ここに表示していたTop Statsは削除しました。
-              代わりに各日付の行に内包しています。
-           */}
-          
           <div className="flex flex-wrap gap-4 items-center justify-between">
             <div className="flex bg-white rounded-lg border p-1 shadow-sm">
                 <button onClick={() => setFilterMode('ALL')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${filterMode === 'ALL' ? 'bg-blue-100 text-blue-800' : 'text-gray-500 hover:bg-gray-100'}`}>全て表示</button>
@@ -1573,13 +1605,11 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
                     wardsData.flatMap(w => w.monitors.flatMap(m => m.records.map(r => r.checker)))
                 )).filter(Boolean).join(', ');
 
-                // ★日ごとの統計計算
-                // 表示フィルタリングに関わらず、その日の全データから計算するため historyRecords を使用
+                // 日ごとの統計計算
                 const dailyRawRecords = historyRecords.filter(r => r.date === date);
                 const dailyTotal = dailyRawRecords.length;
                 const dailyInUse = dailyRawRecords.filter(r => r.inUse === 'YES').length;
                 const dailyIssues = dailyRawRecords.filter(r => r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG').length;
-                // 稼働率 (使用中 / 全点検数)
                 const dailyUtilization = dailyTotal > 0 ? Math.round((dailyInUse / dailyTotal) * 100) : 0;
 
                 return (
@@ -1593,7 +1623,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
                         {checkers && <div className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100 flex items-center gap-1"><User size={12}/> {checkers}</div>}
                     </div>
                     
-                    {/* ★ここに日ごとの統計情報を追加 */}
+                    {/* 日ごとの統計情報 */}
                     <div className="flex items-center gap-4">
                         {dailyTotal > 0 && (
                             <div className="flex gap-2">
@@ -1719,7 +1749,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
   );
 }
 
-// 7. CSVExportModal (New)
+// 7. CSVExportModal (CSV出力設定モーダル)
 function CSVExportModal({ onClose, onExportDaily, onExportMonthly }) {
     const [mode, setMode] = useState('DAILY'); // DAILY | MONTHLY
     const [date, setDate] = useState(new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-'));
@@ -1763,14 +1793,13 @@ function CSVExportModal({ onClose, onExportDaily, onExportMonthly }) {
     );
 }
 
-// 6. DeviceHistoryModal
+// 6. DeviceHistoryModal (個別機器の履歴モーダル)
 function DeviceHistoryModal({ db, appId, device, onClose }) {
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         const fetchDeviceHistory = async () => {
-            // Remove orderBy and limit to avoid index requirement
             const q = query(
                 collection(db, 'artifacts', appId, 'public', 'data', 'checks'),
                 where('deviceId', '==', device.id)
@@ -1779,9 +1808,9 @@ function DeviceHistoryModal({ db, appId, device, onClose }) {
             try {
                 const snapshot = await getDocs(q);
                 const list = snapshot.docs.map(d => d.data());
-                // Sort in memory (descending date)
+                // メモリ上で日付降順にソート
                 list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-                setRecords(list.slice(0, 30)); // Limit to latest 30 locally
+                setRecords(list.slice(0, 30)); // 最新30件のみ表示
             } catch (e) {
                 console.error("Error fetching device history:", e);
             } finally {
