@@ -287,6 +287,8 @@ function App() {
                 setSelectedDevice(filteredDevices[currentIndex - 1]);
             }
         }
+    } else if (action === 'STAY') {
+        // STAYの場合は選択状態を解除せず、そのままにする
     } else {
         setSelectedDevice(null);
     }
@@ -612,7 +614,8 @@ function CheckInlineForm({ device, initialData, checker, onClose, onSave, onDele
   };
 
   const handleSave = () => {
-    onSave(createRecord(), 'CLOSE'); 
+    // 修正: 保存後も閉じないようにアクションを'STAY'に変更
+    onSave(createRecord(), 'STAY'); 
   };
   
   const handleSaveAndNext = () => {
