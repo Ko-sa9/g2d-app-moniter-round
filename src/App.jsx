@@ -453,11 +453,12 @@ function App() {
       
       {/* Footer Navigation (病棟選択中のみ表示) */}
       {selectedWard && (
-        // 修正: p-4 を py-6 px-4 に変更して高さを広げ、タップしやすくしました
-        <div className="bg-white py-6 px-4 border-t sticky bottom-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] safe-area-bottom z-10">
+        // 修正: py-6(前回) -> py-5(今回) に変更して、高さを中間に調整
+        <div className="bg-white py-5 px-4 border-t sticky bottom-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] safe-area-bottom z-10">
           <div className="max-w-3xl mx-auto flex justify-between items-center">
+             {/* 修正: アイコン22px, 文字サイズtext-sm に変更 */}
              <button onClick={() => setSelectedWard(null)} className="flex items-center gap-1 text-gray-500 font-bold hover:text-gray-700 p-2 -ml-2 rounded-lg active:bg-gray-100">
-                <ChevronDown size={24} className="rotate-90"/> <span className="text-base">病棟選択に戻る</span>
+                <ChevronDown size={22} className="rotate-90"/> <span className="text-sm">病棟選択に戻る</span>
              </button>
              <div className="text-xs text-gray-400">
                 {Object.keys(records).length}件 完了
