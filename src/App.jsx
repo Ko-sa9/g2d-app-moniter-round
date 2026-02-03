@@ -204,6 +204,7 @@ function App() {
   }, [devices, records]);
 
   // CSVダウンロード処理
+  // 修正後: handleDownloadCSV関数
   const handleDownloadCSV = (targetRecords, fileNameDate) => {
     const list = Array.isArray(targetRecords) ? targetRecords : Object.values(targetRecords);
     const header = ['点検日', '時間', '病棟', '点検者', 'モニタ', 'ch', '送信機型番', '①使用中', '②受信状態', '不良理由', '備考', '③破損', '④ch確認'];
@@ -228,14 +229,19 @@ function App() {
       ].join(',');
     });
 
-    const csvContent = "data:text/csv;charset=utf-8," + [header.join(','), ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    // Windows対策: BOM (0xEF, 0xBB, 0xBF) を付与
+    const csvContent = [header.join(','), ...rows].join('\n');
+    const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
+    const blob = new Blob([bom, csvContent], { type: "text/csv;charset=utf-8" });
+    
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", url);
     link.setAttribute("download", `送信機点検結果_${fileNameDate}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const executeSave = () => {
@@ -946,20 +952,38 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
   };
-  const handleDrop = async (e, targetItem) => {
+// 修正後: リスト全体の順序を再計算して保存する方式に変更
+const handleDrop = async (e, targetItem) => {
     e.preventDefault();
     if (!draggedItem || draggedItem.id === targetItem.id) return;
-    if (draggedItem.monitorGroup !== targetItem.monitorGroup) return;
+
+    // 現在の表示順（ソート済み）リストを取得
+    const currentList = [...list].sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
     
-    // sortOrderを入れ替えて保存
+    const fromIndex = currentList.findIndex(item => item.id === draggedItem.id);
+    const toIndex = currentList.findIndex(item => item.id === targetItem.id);
+    
+    if (fromIndex === -1 || toIndex === -1) return;
+
+    // 配列内でアイテムを移動
+    const newList = [...currentList];
+    const [movedItem] = newList.splice(fromIndex, 1);
+    newList.splice(toIndex, 0, movedItem);
+
+    // 新しい順序で連番を振り直して保存
     const batch = writeBatch(db);
-    const draggedOrder = draggedItem.sortOrder ?? 0;
-    const targetOrder = targetItem.sortOrder ?? 0;
-    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', draggedItem.id), { sortOrder: targetOrder });
-    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', targetItem.id), { sortOrder: draggedOrder });
+    newList.forEach((item, index) => {
+        // sortOrder は 1 から開始
+        const newOrder = index + 1;
+        // 値が変わる場合のみ更新予約（書き込み削減）
+        if (item.sortOrder !== newOrder) {
+            batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'staff', item.id), { sortOrder: newOrder });
+        }
+    });
+    
     await batch.commit();
     setDraggedItem(null);
-  };
+};
 
   // --- Ward DnD Handlers (病棟の並び替え) ---
   const handleWardDragStart = (e, ward) => {
