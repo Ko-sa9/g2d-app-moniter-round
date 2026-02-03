@@ -204,7 +204,6 @@ function App() {
   }, [devices, records]);
 
   // CSVダウンロード処理
-  // 修正後: handleDownloadCSV関数
   const handleDownloadCSV = (targetRecords, fileNameDate) => {
     const list = Array.isArray(targetRecords) ? targetRecords : Object.values(targetRecords);
     const header = ['点検日', '時間', '病棟', '点検者', 'モニタ', 'ch', '送信機型番', '①使用中', '②受信状態', '不良理由', '備考', '③破損', '④ch確認'];
@@ -364,12 +363,28 @@ function App() {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                {wards.map(ward => (
-                  <button key={ward} onClick={() => setSelectedWard(ward)} className="p-4 bg-white rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all active:scale-95 text-left group">
-                    <span className="block text-lg font-bold text-gray-800 group-hover:text-blue-600">{ward}</span>
-                    <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full mt-1 inline-block">{devices.filter(d => d.ward === ward).length}台</span>
-                  </button>
-                ))}
+                {wards.map(ward => {
+                    // ★病棟ごとの進捗計算を追加
+                    const wardDevices = devices.filter(d => d.ward === ward);
+                    const wardTotal = wardDevices.length;
+                    const wardChecked = wardDevices.filter(d => records[d.id]).length;
+                    const wardProgress = wardTotal > 0 ? Math.round((wardChecked / wardTotal) * 100) : 0;
+                    
+                    return (
+                      <button key={ward} onClick={() => setSelectedWard(ward)} className="p-4 bg-white rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all active:scale-95 text-left group">
+                        <span className="block text-lg font-bold text-gray-800 group-hover:text-blue-600 mb-2">{ward}</span>
+                        
+                        {/* 進捗バー表示 */}
+                        <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden mb-1">
+                            <div className="h-full bg-blue-500 transition-all duration-500" style={{ width: `${wardProgress}%` }}></div>
+                        </div>
+                        <div className="flex justify-between items-end">
+                            <span className="text-xs text-gray-400">{wardChecked} / {wardTotal} 台</span>
+                            <span className="text-sm font-bold text-blue-600">{wardProgress}%</span>
+                        </div>
+                      </button>
+                    );
+                })}
               </div>
             </div>
           ) : (
@@ -952,38 +967,20 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
   };
-// 修正後: リスト全体の順序を再計算して保存する方式に変更
-const handleDrop = async (e, targetItem) => {
+  const handleDrop = async (e, targetItem) => {
     e.preventDefault();
     if (!draggedItem || draggedItem.id === targetItem.id) return;
-
-    // 現在の表示順（ソート済み）リストを取得
-    const currentList = [...list].sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
+    if (draggedItem.monitorGroup !== targetItem.monitorGroup) return;
     
-    const fromIndex = currentList.findIndex(item => item.id === draggedItem.id);
-    const toIndex = currentList.findIndex(item => item.id === targetItem.id);
-    
-    if (fromIndex === -1 || toIndex === -1) return;
-
-    // 配列内でアイテムを移動
-    const newList = [...currentList];
-    const [movedItem] = newList.splice(fromIndex, 1);
-    newList.splice(toIndex, 0, movedItem);
-
-    // 新しい順序で連番を振り直して保存
+    // sortOrderを入れ替えて保存
     const batch = writeBatch(db);
-    newList.forEach((item, index) => {
-        // sortOrder は 1 から開始
-        const newOrder = index + 1;
-        // 値が変わる場合のみ更新予約（書き込み削減）
-        if (item.sortOrder !== newOrder) {
-            batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'staff', item.id), { sortOrder: newOrder });
-        }
-    });
-    
+    const draggedOrder = draggedItem.sortOrder ?? 0;
+    const targetOrder = targetItem.sortOrder ?? 0;
+    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', draggedItem.id), { sortOrder: targetOrder });
+    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', targetItem.id), { sortOrder: draggedOrder });
     await batch.commit();
     setDraggedItem(null);
-};
+  };
 
   // --- Ward DnD Handlers (病棟の並び替え) ---
   const handleWardDragStart = (e, ward) => {
@@ -1333,19 +1330,37 @@ function StaffMasterEditor({ list, onSave, onDelete }) {
       e.dataTransfer.dropEffect = 'move';
   };
 
+  // 修正後: リスト全体の順序を再計算して保存する方式に変更
   const handleDrop = async (e, targetItem) => {
-      e.preventDefault();
-      if (!draggedItem || draggedItem.id === targetItem.id) return;
-      
-      const batch = writeBatch(db);
-      const draggedOrder = draggedItem.sortOrder ?? 0;
-      const targetOrder = targetItem.sortOrder ?? 0;
-      
-      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'staff', draggedItem.id), { sortOrder: targetOrder });
-      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'staff', targetItem.id), { sortOrder: draggedOrder });
-      
-      await batch.commit();
-      setDraggedItem(null);
+    e.preventDefault();
+    if (!draggedItem || draggedItem.id === targetItem.id) return;
+
+    // 現在の表示順（ソート済み）リストを取得
+    const currentList = [...list].sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
+    
+    const fromIndex = currentList.findIndex(item => item.id === draggedItem.id);
+    const toIndex = currentList.findIndex(item => item.id === targetItem.id);
+    
+    if (fromIndex === -1 || toIndex === -1) return;
+
+    // 配列内でアイテムを移動
+    const newList = [...currentList];
+    const [movedItem] = newList.splice(fromIndex, 1);
+    newList.splice(toIndex, 0, movedItem);
+
+    // 新しい順序で連番を振り直して保存
+    const batch = writeBatch(db);
+    newList.forEach((item, index) => {
+        // sortOrder は 1 から開始
+        const newOrder = index + 1;
+        // 値が変わる場合のみ更新予約（書き込み削減）
+        if (item.sortOrder !== newOrder) {
+            batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'staff', item.id), { sortOrder: newOrder });
+        }
+    });
+    
+    await batch.commit();
+    setDraggedItem(null);
   };
 
   // Touch Handlers for Mobile
