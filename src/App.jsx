@@ -67,6 +67,10 @@ function App() {
   // 時計用のstate
   const [currentTime, setCurrentTime] = useState(new Date());
 
+  // ★スクロール制御用のStateとRef
+  const mainScrollRef = useRef(null);
+  const [showFooter, setShowFooter] = useState(true); // 初期値はTopにいるので表示
+
   // アプリ起動時（またはリロード時）の日付で固定し、データ保存とクエリの日付を一致させる
   const today = useMemo(() => getTodayString(), []);
 
@@ -158,6 +162,30 @@ function App() {
 
     return () => { unsubDevices(); unsubStaff(); unsubModels(); unsubWards(); unsubChecks(); };
   }, [user, today]);
+
+  // ★スクロールイベントハンドラ: 上端・下端の検知
+  const handleScroll = () => {
+    const target = mainScrollRef.current;
+    if (!target) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = target;
+    
+    // 判定基準: 上から20px以内、または 下から20px以内
+    // clientHeight(表示領域)がscrollHeight(全体)より大きい場合はスクロール不要なので常に表示
+    if (scrollHeight <= clientHeight) {
+        setShowFooter(true);
+        return;
+    }
+
+    const isTop = scrollTop < 20;
+    const isBottom = Math.abs(scrollHeight - clientHeight - scrollTop) < 20;
+
+    if (isTop || isBottom) {
+      setShowFooter(true);
+    } else {
+      setShowFooter(false);
+    }
+  };
   
   // --- Helpers & Computed Values ---
   
@@ -311,7 +339,7 @@ function App() {
   if (!user) return <div className="flex h-screen items-center justify-center">Loading...</div>;
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50 text-gray-800 font-sans">
+    <div className="flex flex-col h-screen bg-gray-50 text-gray-800 font-sans overflow-hidden">
       {/* Header Area */}
       <header className="bg-blue-600 text-white p-3 shadow-md sticky top-0 z-10">
         <div className="max-w-3xl mx-auto w-full flex flex-col gap-2">
@@ -342,7 +370,11 @@ function App() {
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 overflow-y-auto p-4">
+      <main 
+        ref={mainScrollRef} 
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto p-4 pb-24" // Footer避けの余白確保
+      >
         <div className="max-w-3xl mx-auto w-full space-y-6">
           {!selectedWard ? (
             // 病棟選択画面
@@ -394,8 +426,9 @@ function App() {
               <div className="flex justify-end items-center">
                 <div className="text-sm font-bold bg-white px-3 py-1 rounded-full shadow-sm border text-gray-600">{selectedWard}</div>
               </div>
-              {/* 修正: pb-24 を pb-4 に変更 (フッターが重ならなくなったため余白削減) */}
-              <div className="space-y-6 pb-4">                {groupedDevices ? (
+              
+              <div className="space-y-6 pb-4">
+                {groupedDevices ? (
                   // モニタごとにグルーピングして表示
                   Object.entries(groupedDevices).map(([groupName, groupDevices]) => (
                     <div key={groupName} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -445,23 +478,34 @@ function App() {
                 )}
                 {filteredDevices.length === 0 && <div className="text-center py-10 text-gray-400 text-sm">該当する機器が見つかりません</div>}
               </div>
-
-              {/* ★ここにフッターを移動 & スタイル変更 (sticky等を削除) */}
-              <div className="bg-white py-5 px-4 border-t rounded-xl shadow-sm mt-4">
-                <div className="flex justify-between items-center">
-                   <button onClick={() => setSelectedWard(null)} className="flex items-center gap-1 text-gray-500 font-bold hover:text-gray-700 p-2 -ml-2 rounded-lg active:bg-gray-100">
-                      <ChevronDown size={22} className="rotate-90"/> <span className="text-sm">病棟選択に戻る</span>
-                   </button>
-                   <div className="text-xs text-gray-400">
-                      {Object.keys(records).length}件 完了
-                   </div>
-                </div>
-              </div>
-
             </div>
           )}
         </div>
       </main>
+      
+      {/* Footer Navigation (アニメーション付き) */}
+      {/* 修正: mainの外に配置し、transformで出し入れ制御 */}
+      <div 
+        className={`fixed bottom-4 left-0 right-0 z-20 flex justify-center transition-transform duration-300 ease-in-out ${
+          selectedWard && showFooter ? 'translate-y-0' : 'translate-y-[150%]'
+        }`}
+      >
+        {selectedWard && (
+          <div className="bg-white/90 backdrop-blur-md py-3 px-6 rounded-full shadow-xl border border-blue-100 flex items-center gap-6 max-w-sm w-full mx-4">
+             <button onClick={() => setSelectedWard(null)} className="flex items-center gap-2 text-gray-600 font-bold hover:text-blue-600 active:scale-95 transition-all">
+                <ChevronDown size={20} className="rotate-90 text-blue-500"/> 
+                <span className="text-sm">戻る</span>
+             </button>
+             <div className="h-4 w-px bg-gray-300"></div>
+             <div className="flex-1 text-center">
+                <span className="text-xs text-gray-500 block">完了数</span>
+                <span className="text-lg font-bold text-blue-600 font-mono leading-none">
+                  {Object.keys(records).length} <span className="text-xs text-gray-400">/ {filteredDevices.length}</span>
+                </span>
+             </div>
+          </div>
+        )}
+      </div>
 
       {/* 確認モーダル */}
       {showConfirmSave && (
