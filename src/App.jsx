@@ -1787,14 +1787,19 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
           ].join(',');
       });
 
-      const csvContent = "data:text/csv;charset=utf-8," + [header.join(','), ...rows].join('\n');
-      const encodedUri = encodeURI(csvContent);
+    // ★ここを修正: BOMを付与してBlobを作成する方式に変更
+      const csvString = [header.join(','), ...rows].join('\n');
+      const bom = new Uint8Array([0xEF, 0xBB, 0xBF]); // BOM (Byte Order Mark)
+      const blob = new Blob([bom, csvString], { type: "text/csv;charset=utf-8" });
+
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.setAttribute("href", encodedUri);
+      link.setAttribute("href", url);
       link.setAttribute("download", `送信機点検月報_${monthStr}.csv`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      URL.revokeObjectURL(url);
   };
 
   const sortedDateKeys = Object.keys(displayStructure).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
