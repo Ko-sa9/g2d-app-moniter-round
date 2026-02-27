@@ -500,7 +500,7 @@ function App() {
              <div className="flex-1 text-center">
                 <span className="text-xs text-gray-500 block">完了数</span>
                 <span className="text-lg font-bold text-blue-600 font-mono leading-none">
-                  {Object.keys(records).length} <span className="text-xs text-gray-400">/ {filteredDevices.length}</span>
+                  {filteredDevices.filter(d => records[d.id]).length} <span className="text-xs text-gray-400">/ {filteredDevices.length}</span>
                 </span>
              </div>
           </div>
