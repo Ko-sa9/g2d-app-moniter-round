@@ -889,7 +889,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
 
   // リストのソートとフィルタリング
   const displayList = useMemo(() => {
-    let sorted = [...list].sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
+    let sorted = [...list].sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999) || a.id.localeCompare(b.id));
     if (!filterText) return sorted;
     return sorted.filter((d) => d.id.includes(filterText) || d.monitorGroup.includes(filterText) || d.ward.includes(filterText));
   }, [list, filterText]);
@@ -1002,6 +1002,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
       e.preventDefault();
       return;
     }
+    e.stopPropagation();
     setDraggedItem(item); 
     if ('dataTransfer' in e) e.dataTransfer.effectAllowed = 'move'; 
   };
@@ -1009,17 +1010,36 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
   };
-  const handleDrop = async (e, targetItem) => {
+  const handleDrop = async (e, targetItem, sourceItem = draggedItem) => {
     e.preventDefault();
-    if (!draggedItem || draggedItem.id === targetItem.id) return;
-    if (draggedItem.monitorGroup !== targetItem.monitorGroup) return;
+    if (e.stopPropagation) e.stopPropagation();
+    if (!sourceItem || sourceItem.id === targetItem.id) return;
+    if (sourceItem.monitorGroup !== targetItem.monitorGroup) return;
     
-    // sortOrderを入れ替えて保存
+    // 現在の表示順（sortOrder → id順）リストを取得
+    const currentList = [...list].sort(
+      (a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999) || a.id.localeCompare(b.id)
+    );
+
+    const fromIndex = currentList.findIndex(item => item.id === sourceItem.id);
+    const toIndex = currentList.findIndex(item => item.id === targetItem.id);
+
+    if (fromIndex === -1 || toIndex === -1) return;
+
+    // 配列内でアイテムを移動
+    const newList = [...currentList];
+    const [movedItem] = newList.splice(fromIndex, 1);
+    newList.splice(toIndex, 0, movedItem);
+
+    // 新しい順序で連番を振り直して保存（差分があるもののみ更新）
     const batch = writeBatch(db);
-    const draggedOrder = draggedItem.sortOrder ?? 0;
-    const targetOrder = targetItem.sortOrder ?? 0;
-    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', draggedItem.id), { sortOrder: targetOrder });
-    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', targetItem.id), { sortOrder: draggedOrder });
+    newList.forEach((item, index) => {
+      const newOrder = index + 1;
+      if (item.sortOrder !== newOrder) {
+        batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', item.id), { sortOrder: newOrder });
+      }
+    });
+
     await batch.commit();
     setDraggedItem(null);
   };
@@ -1032,12 +1052,12 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     if ('dataTransfer' in e) e.dataTransfer.effectAllowed = 'move'; 
   };
   
-  const handleWardDrop = async (e, targetWardName) => {
+  const handleWardDrop = async (e, targetWardName, sourceWard = draggedWard) => {
     e.preventDefault();
-    if (!draggedWard || draggedWard === targetWardName) return;
+    if (!sourceWard || sourceWard === targetWardName) return;
 
     const currentOrder = sortedWards;
-    const fromIndex = currentOrder.indexOf(draggedWard);
+    const fromIndex = currentOrder.indexOf(sourceWard);
     const toIndex = currentOrder.indexOf(targetWardName);
     
     if (fromIndex === -1 || toIndex === -1) return;
@@ -1045,7 +1065,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
     // 配列操作で順序を変更
     const newOrder = [...currentOrder];
     newOrder.splice(fromIndex, 1);
-    newOrder.splice(toIndex, 0, draggedWard);
+    newOrder.splice(toIndex, 0, sourceWard);
 
     // 全病棟の順序をFirestoreに保存
     const batch = writeBatch(db);
@@ -1062,9 +1082,13 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
   
   // タッチデバイス用DnD処理 (Device)
   const touchItemRef = useRef(null);
-  const handleTouchStart = (e, item) => { touchItemRef.current = item; };
+  const handleTouchStart = (e, item) => {
+    e.stopPropagation();
+    touchItemRef.current = item;
+  };
   const handleTouchMove = (e) => {};
   const handleTouchEnd = async (e) => {
+    e.stopPropagation();
     const changedTouch = e.changedTouches[0];
     const elem = document.elementFromPoint(changedTouch.clientX, changedTouch.clientY);
     const targetRow = elem?.closest('[data-device-id]');
@@ -1072,7 +1096,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
       const targetId = targetRow.getAttribute('data-device-id');
       if (targetId && targetId !== touchItemRef.current.id) {
         const targetDevice = list.find((d) => d.id === targetId);
-        if (targetDevice) await handleDrop({ preventDefault: () => {} }, targetDevice);
+        if (targetDevice) await handleDrop(e, targetDevice, touchItemRef.current);
       }
     }
     touchItemRef.current = null;
@@ -1090,7 +1114,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete }) {
       if (targetRow && touchWardRef.current) {
           const targetWardName = targetRow.getAttribute('data-ward-name');
           if (targetWardName && targetWardName !== touchWardRef.current) {
-              await handleWardDrop({ preventDefault: () => {} }, targetWardName);
+              await handleWardDrop(e, targetWardName, touchWardRef.current);
           }
       }
       touchWardRef.current = null;
@@ -1373,14 +1397,14 @@ function StaffMasterEditor({ list, onSave, onDelete }) {
   };
 
   // 修正後: リスト全体の順序を再計算して保存する方式に変更
-  const handleDrop = async (e, targetItem) => {
+  const handleDrop = async (e, targetItem, sourceItem = draggedItem) => {
     e.preventDefault();
-    if (!draggedItem || draggedItem.id === targetItem.id) return;
+    if (!sourceItem || sourceItem.id === targetItem.id) return;
 
     // 現在の表示順（ソート済み）リストを取得
     const currentList = [...list].sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
     
-    const fromIndex = currentList.findIndex(item => item.id === draggedItem.id);
+    const fromIndex = currentList.findIndex(item => item.id === sourceItem.id);
     const toIndex = currentList.findIndex(item => item.id === targetItem.id);
     
     if (fromIndex === -1 || toIndex === -1) return;
@@ -1416,7 +1440,7 @@ function StaffMasterEditor({ list, onSave, onDelete }) {
       const targetId = targetRow.getAttribute('data-staff-id');
       if (targetId && targetId !== touchItemRef.current.id) {
         const targetStaff = list.find((s) => s.id === targetId);
-        if (targetStaff) await handleDrop({ preventDefault: () => {} }, targetStaff);
+        if (targetStaff) await handleDrop(e, targetStaff, touchItemRef.current);
       }
     }
     touchItemRef.current = null;
@@ -1504,16 +1528,27 @@ function TransmitterModelEditor({ list, onSave, onDelete }) {
       e.dataTransfer.dropEffect = 'move';
   };
 
-  const handleDrop = async (e, targetItem) => {
+  const handleDrop = async (e, targetItem, sourceItem = draggedItem) => {
       e.preventDefault();
-      if (!draggedItem || draggedItem.id === targetItem.id) return;
+      if (!sourceItem || sourceItem.id === targetItem.id) return;
       
+      const currentList = [...list].sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
+      const fromIndex = currentList.findIndex(item => item.id === sourceItem.id);
+      const toIndex = currentList.findIndex(item => item.id === targetItem.id);
+
+      if (fromIndex === -1 || toIndex === -1) return;
+
+      const newList = [...currentList];
+      const [movedItem] = newList.splice(fromIndex, 1);
+      newList.splice(toIndex, 0, movedItem);
+
       const batch = writeBatch(db);
-      const draggedOrder = draggedItem.sortOrder ?? 0;
-      const targetOrder = targetItem.sortOrder ?? 0;
-      
-      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', draggedItem.id), { sortOrder: targetOrder });
-      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', targetItem.id), { sortOrder: draggedOrder });
+      newList.forEach((item, index) => {
+          const newOrder = index + 1;
+          if (item.sortOrder !== newOrder) {
+              batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', item.id), { sortOrder: newOrder });
+          }
+      });
       
       await batch.commit();
       setDraggedItem(null);
@@ -1530,7 +1565,7 @@ function TransmitterModelEditor({ list, onSave, onDelete }) {
       const targetId = targetRow.getAttribute('data-model-id');
       if (targetId && targetId !== touchItemRef.current.id) {
         const targetModel = list.find((m) => m.id === targetId);
-        if (targetModel) await handleDrop({ preventDefault: () => {} }, targetModel);
+        if (targetModel) await handleDrop(e, targetModel, touchItemRef.current);
       }
     }
     touchItemRef.current = null;
