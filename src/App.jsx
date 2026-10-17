@@ -59,10 +59,11 @@ function App() {
   // historyTargetDevice: 個別履歴を表示する対象のデバイス
   const [historyTargetDevice, setHistoryTargetDevice] = useState(null);
 
-  // モーダル表示フラグ
+  // モーダル・メニュー表示フラグ
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showConfirmSave, setShowConfirmSave] = useState(false);
+  const [showWardMenu, setShowWardMenu] = useState(false);
   
   // 時計用のstate
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -443,9 +444,82 @@ function App() {
           ) : (
             // 機器リスト表示画面（病棟選択後）
             <div className="space-y-4 animate-slide-up">
-              {/* ナビゲーションヘッダ */}
-              <div className="flex justify-end items-center">
-                <div className="text-sm font-bold bg-white px-3 py-1 rounded-full shadow-sm border text-gray-600">{selectedWard}</div>
+              {/* ナビゲーションヘッダ（病棟クイック切替メニュー付き） */}
+              <div className="flex justify-end items-center relative">
+                <button
+                  onClick={() => setShowWardMenu(prev => !prev)}
+                  className="flex items-center gap-1.5 text-sm font-bold bg-white hover:bg-blue-50 active:scale-95 px-3.5 py-1.5 rounded-full shadow-sm border border-gray-200 text-gray-700 transition-all"
+                  title="タップして病棟を切り替え"
+                >
+                  <MapPin size={14} className="text-blue-600" />
+                  <span>{selectedWard}</span>
+                  <ChevronDown size={16} className={`text-gray-400 transition-transform duration-200 ${showWardMenu ? 'rotate-180 text-blue-600' : ''}`} />
+                </button>
+
+                {showWardMenu && (
+                  <>
+                    {/* メニュー外タップで閉じる透明オーバーレイ */}
+                    <div className="fixed inset-0 z-20" onClick={() => setShowWardMenu(false)} />
+                    
+                    {/* 病棟選択ドロップダウン */}
+                    <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 z-30 overflow-hidden animate-fade-in">
+                      <button
+                        onClick={() => {
+                          setSelectedWard(null);
+                          setSelectedDevice(null);
+                          setShowWardMenu(false);
+                        }}
+                        className="w-full px-4 py-2.5 text-left text-xs font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2 border-b border-gray-100 transition-colors"
+                      >
+                        <Grid size={14} className="text-blue-500" />
+                        <span>病棟選択画面（一覧）へ戻る</span>
+                      </button>
+
+                      <div className="max-h-72 overflow-y-auto divide-y divide-gray-100">
+                        {wards.map(ward => {
+                          const wardDevices = activeDevices.filter(d => d.ward === ward);
+                          const wardTotal = wardDevices.length;
+                          const wardChecked = wardDevices.filter(d => records[d.id]).length;
+                          const wardProgress = wardTotal > 0 ? Math.round((wardChecked / wardTotal) * 100) : 0;
+                          const isCurrent = ward === selectedWard;
+                          const isComplete = wardTotal > 0 && wardChecked === wardTotal;
+
+                          return (
+                            <button
+                              key={ward}
+                              onClick={() => {
+                                setSelectedWard(ward);
+                                setSelectedDevice(null);
+                                setShowWardMenu(false);
+                                if (mainScrollRef.current) {
+                                  mainScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+                                }
+                              }}
+                              className={`w-full px-4 py-2.5 text-left flex items-center justify-between transition-colors ${
+                                isCurrent ? 'bg-blue-50/80 text-blue-700 font-bold' : 'hover:bg-gray-50 text-gray-700'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                  isCurrent ? 'bg-blue-600' : isComplete ? 'bg-green-500' : 'bg-gray-300'
+                                }`} />
+                                <span className="text-sm truncate">{ward}</span>
+                              </div>
+                              <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                                <span className="text-xs text-gray-400 font-mono">{wardChecked}/{wardTotal}</span>
+                                <span className={`text-xs font-bold font-mono px-1.5 py-0.5 rounded ${
+                                  isComplete ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                                }`}>
+                                  {wardProgress}%
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
               
               <div className="space-y-6 pb-4">
@@ -513,7 +587,7 @@ function App() {
       >
         {selectedWard && (
           <div className="bg-white/90 backdrop-blur-md py-3 px-6 rounded-full shadow-xl border border-blue-100 flex items-center gap-6 max-w-sm w-full mx-4">
-             <button onClick={() => setSelectedWard(null)} className="flex items-center gap-2 text-gray-600 font-bold hover:text-blue-600 active:scale-95 transition-all">
+             <button onClick={() => { setSelectedWard(null); setSelectedDevice(null); setShowWardMenu(false); }} className="flex items-center gap-2 text-gray-600 font-bold hover:text-blue-600 active:scale-95 transition-all">
                 <ChevronDown size={20} className="rotate-90 text-blue-500"/> 
                 <span className="text-sm">戻る</span>
              </button>
