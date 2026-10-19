@@ -1095,18 +1095,63 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
     setDeviceRows(newRows);
   };
 
-  // 新規登録の実行
+  // 新規登録の実行（重複chチェック・確認付き）
   const handleCompleteAdd = async () => {
     const validRows = deviceRows.filter(r => r.id.trim() !== '');
     if (validRows.length === 0) return alert('chを1つ以上入力してください');
+
+    // 同一登録画面内での重複入力チェック
+    const seenIds = new Set();
+    const duplicatedInInput = new Set();
+    for (const row of validRows) {
+      const trimmed = row.id.trim();
+      if (seenIds.has(trimmed)) {
+        duplicatedInInput.add(trimmed);
+      }
+      seenIds.add(trimmed);
+    }
+    if (duplicatedInInput.size > 0) {
+      return alert(`同じch（${Array.from(duplicatedInInput).join(', ')}）が複数行に入力されています。\n重複を解消してから登録してください。`);
+    }
+
+    // 既存機器（稼働中・削除済み）との重複チェック
+    const existingConflicts = [];
+    for (const row of validRows) {
+      const trimmed = row.id.trim();
+      const found = list.find(d => d.id === trimmed);
+      if (found) {
+        existingConflicts.push(found);
+      }
+    }
+
+    if (existingConflicts.length > 0) {
+      const conflictLines = existingConflicts.map(d =>
+        d.isDeleted
+          ? `・ch:${d.id}（削除済み機器 / 旧所属: ${d.ward} - ${d.monitorGroup}）`
+          : `・ch:${d.id}（現在: ${d.ward} / ${d.monitorGroup}）`
+      ).join('\n');
+
+      const confirmMsg = existingConflicts.length === 1
+        ? `このch（ch:${existingConflicts[0].id}）はすでに${
+            existingConflicts[0].isDeleted
+              ? `削除済み機器（旧: ${existingConflicts[0].ward} / ${existingConflicts[0].monitorGroup}）`
+              : `「${existingConflicts[0].ward} / ${existingConflicts[0].monitorGroup}」`
+          }に存在します。登録しますか？\n\n（※OKを押すと「${newDeviceBase.ward} / ${newDeviceBase.monitorGroup}」へ移動・上書き登録されます）`
+        : `以下のchはすでに存在します。登録しますか？\n\n${conflictLines}\n\n（※OKを押すと「${newDeviceBase.ward} / ${newDeviceBase.monitorGroup}」へ移動・上書き登録されます）`;
+
+      if (!confirm(confirmMsg)) return;
+    }
+
     let currentMaxSort = list.length > 0 ? Math.max(...list.map((d) => d.sortOrder || 0)) : 0;
     for (const row of validRows) {
+      const trimmed = row.id.trim();
+      const existingDevice = list.find(d => d.id === trimmed);
       currentMaxSort++;
       const newDevice = {
         ...newDeviceBase,
-        id: row.id.trim(),
+        id: trimmed,
         model: row.model,
-        sortOrder: currentMaxSort,
+        sortOrder: existingDevice?.sortOrder ?? currentMaxSort,
         isDeleted: false,
         deletedAt: null
       };
@@ -1158,11 +1203,25 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
       return alert('モニタを選択してください');
     }
 
+    // ch番号が変更された場合の重複チェック・確認
+    if (trimmedId !== originalId) {
+      const existingDevice = list.find(d => d.id === trimmedId);
+      if (existingDevice) {
+        const locationDesc = existingDevice.isDeleted
+          ? `削除済み機器（旧: ${existingDevice.ward} / ${existingDevice.monitorGroup}）`
+          : `「${existingDevice.ward} / ${existingDevice.monitorGroup}」`;
+        const confirmMsg = `このch（ch:${trimmedId}）はすでに${locationDesc}に存在します。登録（上書き）しますか？\n\n（※OKを押すと既存の ch:${trimmedId} が「${trimmedWard} / ${targetMonitorGroup}」へ上書きされます）`;
+        if (!confirm(confirmMsg)) return;
+      }
+    }
+
     const updatedDevice = {
       ...editItem,
       id: trimmedId,
       ward: trimmedWard,
-      monitorGroup: targetMonitorGroup
+      monitorGroup: targetMonitorGroup,
+      isDeleted: false,
+      deletedAt: null
     };
 
     if (trimmedId !== originalId) {
@@ -1417,13 +1476,60 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
             <div className="bg-blue-50 p-4 rounded-lg text-sm text-blue-800 mb-4 border border-blue-100"><p className="font-bold mb-1">確認:</p><ul className="list-disc pl-5 space-y-1"><li>病棟: {newDeviceBase.ward}</li><li>モニタ: {newDeviceBase.monitorGroup}</li></ul></div>
             <div className="space-y-3">
               <div className="grid grid-cols-12 gap-2 text-xs font-bold text-gray-500 px-1"><div className="col-span-6">ch (管理番号)</div><div className="col-span-5">型番</div><div className="col-span-1"></div></div>
-              {deviceRows.map((row, index) => (
-                <div key={index} className="grid grid-cols-12 gap-2 items-center">
-                  <div className="col-span-6"><input className="w-full border p-2 rounded font-mono" placeholder="例: 1001" value={row.id} onChange={e => updateRow(index, 'id', e.target.value)} autoFocus={index === deviceRows.length - 1}/></div>
-                  <div className="col-span-5"><select className="w-full border p-2 rounded" value={row.model} onChange={e => updateRow(index, 'model', e.target.value)}>{transmitterModelsList.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
-                  <div className="col-span-1 flex justify-center">{deviceRows.length > 1 && <button onClick={() => removeRow(index)} className="text-red-400 hover:text-red-600 p-1"><Trash2 size={18}/></button>}</div>
-                </div>
-              ))}
+              {deviceRows.map((row, index) => {
+                const trimmed = row.id.trim();
+                const isDupInForm = trimmed !== '' && deviceRows.some((r, idx) => idx !== index && r.id.trim() === trimmed);
+                const existingMatch = trimmed !== '' ? list.find(d => d.id === trimmed) : null;
+
+                return (
+                  <div key={index} className="space-y-1">
+                    <div className="grid grid-cols-12 gap-2 items-center">
+                      <div className="col-span-6">
+                        <input
+                          className={`w-full border p-2 rounded font-mono ${
+                            isDupInForm
+                              ? 'border-red-500 bg-red-50'
+                              : existingMatch
+                                ? 'border-amber-500 bg-amber-50'
+                                : ''
+                          }`}
+                          placeholder="例: 1001"
+                          value={row.id}
+                          onChange={e => updateRow(index, 'id', e.target.value)}
+                          autoFocus={index === deviceRows.length - 1}
+                        />
+                      </div>
+                      <div className="col-span-5">
+                        <select className="w-full border p-2 rounded" value={row.model} onChange={e => updateRow(index, 'model', e.target.value)}>
+                          {transmitterModelsList.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="col-span-1 flex justify-center">
+                        {deviceRows.length > 1 && (
+                          <button onClick={() => removeRow(index)} className="text-red-400 hover:text-red-600 p-1">
+                            <Trash2 size={18}/>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {isDupInForm && (
+                      <div className="text-xs text-red-600 font-bold flex items-center gap-1 pl-1">
+                        <AlertTriangle size={13} /> この入力画面内で同じ ch:{trimmed} が重複しています
+                      </div>
+                    )}
+                    {!isDupInForm && existingMatch && (
+                      <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 flex items-center gap-1">
+                        <AlertTriangle size={13} className="flex-shrink-0 text-amber-600" />
+                        <span>
+                          {existingMatch.isDeleted
+                            ? `ch:${trimmed} は削除済み機器（旧: ${existingMatch.ward} / ${existingMatch.monitorGroup}）に存在します（登録時に復元・上書き確認を行います）`
+                            : `ch:${trimmed} はすでに「${existingMatch.ward} / ${existingMatch.monitorGroup}」に存在します（登録時に移動・上書き確認を行います）`}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               <button onClick={addRow} className="w-full py-2 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-colors flex items-center justify-center gap-2"><Plus size={16}/> 機器を追加</button>
             </div>
           </div>
@@ -1457,7 +1563,31 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
             <div className="space-y-3">
                <div>
                  <label className="text-xs font-bold text-gray-600 block mb-1">ch (管理番号)</label>
-                 <input className="w-full border p-2 rounded bg-white font-mono" value={editItem.id} onChange={e => setEditItem({...editItem, id: e.target.value})}/>
+                 <input
+                   className={`w-full border p-2 rounded font-mono ${
+                     editItem.id.trim() !== '' && editItem.id.trim() !== originalId && list.some(d => d.id === editItem.id.trim())
+                       ? 'border-amber-500 bg-amber-50'
+                       : 'bg-white'
+                   }`}
+                   value={editItem.id}
+                   onChange={e => setEditItem({...editItem, id: e.target.value})}
+                 />
+                 {(() => {
+                   const trimmedEditId = editItem.id.trim();
+                   if (!trimmedEditId || trimmedEditId === originalId) return null;
+                   const conflict = list.find(d => d.id === trimmedEditId);
+                   if (!conflict) return null;
+                   return (
+                     <div className="mt-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 flex items-center gap-1">
+                       <AlertTriangle size={13} className="flex-shrink-0 text-amber-600" />
+                       <span>
+                         {conflict.isDeleted
+                           ? `ch:${trimmedEditId} は削除済み機器（旧: ${conflict.ward} / ${conflict.monitorGroup}）に存在します`
+                           : `ch:${trimmedEditId} はすでに「${conflict.ward} / ${conflict.monitorGroup}」に存在します`}
+                       </span>
+                     </div>
+                   );
+                 })()}
                </div>
                
                <div>
