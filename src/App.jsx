@@ -592,10 +592,10 @@ function App() {
         </div>
       </main>
       
-      {/* 右下フローティング病棟切り替えボタン（B案：点検フォーム展開中は自動で隠して誤タップを防止） */}
+      {/* 右下フローティング病棟切り替えボタン（常時表示） */}
       <div
         className={`fixed bottom-5 right-4 z-30 transition-all duration-300 ease-in-out ${
-          selectedWard && !selectedDevice
+          selectedWard
             ? 'translate-y-0 opacity-100'
             : 'translate-y-24 opacity-0 pointer-events-none'
         }`}
