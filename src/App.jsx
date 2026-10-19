@@ -50,6 +50,7 @@ function App() {
   const [staffList, setStaffList] = useState([]);
   const [transmitterModels, setTransmitterModels] = useState([]);
   const [wardList, setWardList] = useState([]); // 病棟マスタ（表示順序保持用）
+  const [monitorList, setMonitorList] = useState([]); // モニタマスタ（単体登録モニタ保持用）
   const [records, setRecords] = useState({}); // 本日の点検記録
 
   // UI状態管理
@@ -153,7 +154,13 @@ function App() {
       setWardList(list);
     }, (error) => console.error("Wards sync error", error));
 
-    // 5. Checks (本日の点検記録)
+    // 5. Monitors (モニタマスタ・単体登録用)
+    const unsubMonitors = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'monitors'), (snapshot) => {
+      const list = snapshot.docs.map(d => ({ docId: d.id, ...d.data() }));
+      setMonitorList(list);
+    }, (error) => console.error("Monitors sync error", error));
+
+    // 6. Checks (本日の点検記録)
     const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'), where('date', '==', today));
     const unsubChecks = onSnapshot(q, (snapshot) => {
       const recs = {};
@@ -161,7 +168,7 @@ function App() {
       setRecords(recs);
     }, (error) => console.error("Checks sync error", error));
 
-    return () => { unsubDevices(); unsubStaff(); unsubModels(); unsubWards(); unsubChecks(); };
+    return () => { unsubDevices(); unsubStaff(); unsubModels(); unsubWards(); unsubMonitors(); unsubChecks(); };
   }, [user, today]);
 
   // ★スクロールイベントハンドラ: 上端・下端の検知
@@ -193,9 +200,12 @@ function App() {
   // 有効な機器（論理削除されていない機器）のみを抽出
   const activeDevices = useMemo(() => devices.filter(d => !d.isDeleted), [devices]);
 
-  // 病棟リストの生成（マスタの表示順序を反映）
+  // 病棟リストの生成（マスタの表示順序を反映、モニタ単体登録のある病棟も含む）
   const wards = useMemo(() => {
-    const list = Array.from(new Set(activeDevices.map(d => d.ward)));
+    const list = Array.from(new Set([
+      ...activeDevices.map(d => d.ward),
+      ...monitorList.map(m => m.ward)
+    ])).filter(Boolean);
     
     // DBのwardListがある場合はそのsortOrderを優先
     return list.sort((a, b) => {
@@ -208,7 +218,7 @@ function App() {
       if (orderA !== orderB) return orderA - orderB;
       return a.localeCompare(b);
     });
-  }, [activeDevices, wardList]);
+  }, [activeDevices, monitorList, wardList]);
 
   // 選択中の病棟でフィルタリングされたデバイスリスト
   const filteredDevices = useMemo(() => {
@@ -217,16 +227,19 @@ function App() {
     return list;
   }, [selectedWard, activeDevices]); 
 
-  // モニタグループごとにデバイスをまとめる
+  // モニタグループごとにデバイスをまとめる（単体登録モニタも含む）
   const groupedDevices = useMemo(() => {
     if (!selectedWard) return null; 
     const groups = {};
+    monitorList.filter(m => m.ward === selectedWard).forEach(m => {
+      if (m.name && !groups[m.name]) groups[m.name] = [];
+    });
     filteredDevices.forEach(device => {
       if (!groups[device.monitorGroup]) groups[device.monitorGroup] = [];
       groups[device.monitorGroup].push(device);
     });
     return groups;
-  }, [selectedWard, filteredDevices]);
+  }, [selectedWard, filteredDevices, monitorList]);
 
   // 全体の進捗率計算
   const totalProgress = useMemo(() => {
@@ -531,7 +544,7 @@ function App() {
                         <Monitor size={16} className="text-gray-500" /><span className="font-bold text-sm text-gray-700 font-mono">{groupName}</span>
                       </div>
                       <div className="divide-y divide-gray-100">
-                        {groupDevices.map(device => (
+                        {groupDevices.length > 0 ? groupDevices.map(device => (
                           <DeviceRow 
                             key={device.id} 
                             device={device} 
@@ -546,7 +559,9 @@ function App() {
                             isLast={filteredDevices.length > 0 && filteredDevices[filteredDevices.length - 1].id === device.id}
                             date={today}
                           />
-                        ))}
+                        )) : (
+                          <div className="p-4 text-center text-xs text-gray-400">送信機が登録されていません</div>
+                        )}
                       </div>
                     </div>
                   ))
@@ -571,7 +586,9 @@ function App() {
                     ))}
                   </div>
                 )}
-                {filteredDevices.length === 0 && <div className="text-center py-10 text-gray-400 text-sm">該当する機器が見つかりません</div>}
+                {filteredDevices.length === 0 && (!groupedDevices || Object.keys(groupedDevices).length === 0) && (
+                  <div className="text-center py-10 text-gray-400 text-sm">該当する機器が見つかりません</div>
+                )}
               </div>
             </div>
           )}
@@ -618,7 +635,7 @@ function App() {
       )}
 
       {/* 設定モーダル */}
-      {showSettings && <SettingsModal devices={devices} staffList={staffList} transmitterModels={transmitterModels} wardList={wardList} onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsModal devices={devices} staffList={staffList} transmitterModels={transmitterModels} wardList={wardList} monitorList={monitorList} onClose={() => setShowSettings(false)} />}
       
       {/* 履歴・分析モーダル */}
       {showHistory && <HistoryModal db={db} appId={appId} devices={devices} wardList={wardList} onClose={() => setShowHistory(false)} onDownloadCSV={handleDownloadCSV} />}
@@ -898,7 +915,7 @@ function SelectionButton({ label, selected, onClick, color, icon }) {
 // --------------------------------------------------------------------------------------
 // SettingsModal: マスタ管理モーダル
 // --------------------------------------------------------------------------------------
-function SettingsModal({ devices, staffList, transmitterModels, wardList, onClose }) {
+function SettingsModal({ devices, staffList, transmitterModels, wardList, monitorList, onClose }) {
   const [activeTab, setActiveTab] = useState('DEVICE');
   
   // 機器マスタ保存・論理削除・復元・完全削除
@@ -961,6 +978,7 @@ function SettingsModal({ devices, staffList, transmitterModels, wardList, onClos
               list={devices}
               models={transmitterModels}
               wardList={wardList}
+              monitorList={monitorList}
               onSave={handleSaveDevice}
               onDelete={handleDeleteDevice}
               onRestore={handleRestoreDevice}
@@ -977,8 +995,8 @@ function SettingsModal({ devices, staffList, transmitterModels, wardList, onClos
   );
 }
 
-// DeviceMasterEditor: 機器マスタ編集（ドラッグ&ドロップ並び替え、一括追加、病棟間移動、論理削除管理機能付き）
-function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestore, onPermanentDelete }) {
+// DeviceMasterEditor: 機器マスタ編集（ドラッグ&ドロップ並び替え、一括追加、病棟間移動、論理削除管理、単体モニタ登録機能付き）
+function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, onDelete, onRestore, onPermanentDelete }) {
   const [addMode, setAddMode] = useState(null);
   const [addStep, setAddStep] = useState(1);
   const [newDeviceBase, setNewDeviceBase] = useState({ ward: '', monitorGroup: '' });
@@ -986,6 +1004,10 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
   const [monitorMode, setMonitorMode] = useState('EXISTING');
   const [newMonitorModel, setNewMonitorModel] = useState('');
   const [newMonitorSerial, setNewMonitorSerial] = useState('');
+  const [step3Tab, setStep3Tab] = useState('NEW'); // 'NEW' | 'MOVE_EXISTING'
+  const [selectedMoveIds, setSelectedMoveIds] = useState([]);
+  const [moveFilterWard, setMoveFilterWard] = useState('ALL');
+  const [moveSearchText, setMoveSearchText] = useState('');
   const [editItem, setEditItem] = useState(null);
   const [originalId, setOriginalId] = useState('');
   const [editWardMode, setEditWardMode] = useState('EXISTING');
@@ -1004,6 +1026,34 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
 
   const transmitterModelsList = useMemo(() => models.filter(m => m.type === 'TRANSMITTER'), [models]);
   const monitorModelsList = useMemo(() => models.filter(m => m.type === 'MONITOR'), [models]);
+
+  // モニタマスタ用ドキュメントID生成・保存・削除ヘルパー
+  const getMonitorDocId = (ward, monitorName) => encodeURIComponent(`${ward}__${monitorName}`);
+
+  const saveMonitorDoc = async (ward, monitorName) => {
+    const trimmedWard = (ward || '').trim();
+    const trimmedMonitor = (monitorName || '').trim();
+    if (!trimmedWard || !trimmedMonitor) return;
+    const docId = getMonitorDocId(trimmedWard, trimmedMonitor);
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', docId), {
+      ward: trimmedWard,
+      name: trimmedMonitor,
+      updatedAt: getTodayString()
+    });
+    if (!wardList.some(w => w.name === trimmedWard)) {
+      const maxWardSort = wardList.length > 0 ? Math.max(...wardList.map(w => w.sortOrder || 0)) : 0;
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'wards', trimmedWard), {
+        name: trimmedWard,
+        sortOrder: maxWardSort + 1
+      });
+    }
+  };
+
+  const handleDeleteEmptyMonitor = async (ward, monitorName) => {
+    if (!confirm(`モニタ「${ward} / ${monitorName}」を削除しますか？`)) return;
+    const docId = getMonitorDocId(ward, monitorName);
+    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', docId));
+  };
 
   useEffect(() => {
     if (transmitterModelsList.length > 0) {
@@ -1030,6 +1080,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
   const allWards = useMemo(() => {
     const uniqueWards = Array.from(new Set([
       ...activeList.map((d) => d.ward),
+      ...monitorList.map((m) => m.ward),
       ...wardList.map((w) => w.name)
     ])).filter(Boolean);
     
@@ -1043,11 +1094,15 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
       if (orderA !== orderB) return orderA - orderB;
       return a.localeCompare(b);
     });
-  }, [activeList, wardList]);
+  }, [activeList, monitorList, wardList]);
 
   const getMonitorsByWard = (ward) => {
     const wardDevices = activeList.filter((d) => d.ward === ward);
-    return Array.from(new Set(wardDevices.map((d) => d.monitorGroup))).filter(Boolean);
+    const wardMonitors = monitorList.filter((m) => m.ward === ward);
+    return Array.from(new Set([
+      ...wardDevices.map((d) => d.monitorGroup),
+      ...wardMonitors.map((m) => m.name)
+    ])).filter(Boolean);
   };
 
   const toggleWard = (ward) => setExpandedWards(prev => ({ ...prev, [ward]: !prev[ward] }));
@@ -1060,6 +1115,10 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
     setMonitorMode('EXISTING');
     setNewMonitorModel(monitorModelsList.length > 0 ? monitorModelsList[0].name : '');
     setNewMonitorSerial('');
+    setStep3Tab(mode === 'MONITOR' ? 'MOVE_EXISTING' : 'NEW');
+    setSelectedMoveIds([]);
+    setMoveFilterWard('ALL');
+    setMoveSearchText('');
     setAddMode(mode);
     if (mode === 'WARD') { setAddStep(1); } 
     else if (mode === 'MONITOR') { setAddStep(1); setMonitorMode('NEW'); } 
@@ -1071,12 +1130,29 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
     if (addStep === 2) {
       if (monitorMode === 'EXISTING' && !newDeviceBase.monitorGroup) return alert('モニタを選択してください');
       if (monitorMode === 'NEW') {
-        if (!newMonitorModel || !newMonitorSerial) return alert('モニタ型番と製造番号を入力してください');
-        const groupName = `${newMonitorModel} (${newMonitorSerial})`;
+        if (!newMonitorModel || !newMonitorSerial.trim()) return alert('モニタ型番と製造番号を入力してください');
+        const groupName = `${newMonitorModel} (${newMonitorSerial.trim()})`;
         setNewDeviceBase(prev => ({ ...prev, monitorGroup: groupName }));
       }
     }
     setAddStep(prev => prev + 1);
+  };
+
+  // Step 2 から直接モニタ単体で登録完了するハンドラ
+  const handleCompleteMonitorOnly = async () => {
+    if (!newDeviceBase.ward) return alert('病棟を選択または入力してください');
+    let groupName = newDeviceBase.monitorGroup;
+    if (monitorMode === 'NEW') {
+      if (!newMonitorModel || !newMonitorSerial.trim()) return alert('モニタ型番と製造番号を入力してください');
+      groupName = `${newMonitorModel} (${newMonitorSerial.trim()})`;
+    } else if (!groupName) {
+      return alert('モニタを選択してください');
+    }
+
+    await saveMonitorDoc(newDeviceBase.ward, groupName);
+    setExpandedWards(prev => ({ ...prev, [newDeviceBase.ward]: true }));
+    alert(`モニタ「${newDeviceBase.ward} / ${groupName}」を単体で登録しました。\n（既存のモニタからchを選択して移動させることができます）`);
+    setAddMode(null);
   };
 
   const addRow = () => {
@@ -1095,10 +1171,26 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
     setDeviceRows(newRows);
   };
 
-  // 新規登録の実行（重複chチェック・確認付き）
+  const toggleSelectMoveId = (id) => {
+    setSelectedMoveIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
+  };
+
+  // 新規登録・既存ch移動・モニタ単体登録の実行（重複chチェック・確認付き）
   const handleCompleteAdd = async () => {
     const validRows = deviceRows.filter(r => r.id.trim() !== '');
-    if (validRows.length === 0) return alert('chを1つ以上入力してください');
+    const moveDevices = activeList.filter(d => selectedMoveIds.includes(d.id));
+
+    // chが1件も入力・選択されていない場合
+    if (validRows.length === 0 && moveDevices.length === 0) {
+      if (addMode === 'MONITOR' || addMode === 'WARD' || monitorMode === 'NEW') {
+        await saveMonitorDoc(newDeviceBase.ward, newDeviceBase.monitorGroup);
+        setExpandedWards(prev => ({ ...prev, [newDeviceBase.ward]: true }));
+        alert(`モニタ「${newDeviceBase.ward} / ${newDeviceBase.monitorGroup}」を単体で登録しました`);
+        setAddMode(null);
+        return;
+      }
+      return alert('新規chを入力するか、移動する既存のchを選択してください');
+    }
 
     // 同一登録画面内での重複入力チェック
     const seenIds = new Set();
@@ -1114,10 +1206,11 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
       return alert(`同じch（${Array.from(duplicatedInInput).join(', ')}）が複数行に入力されています。\n重複を解消してから登録してください。`);
     }
 
-    // 既存機器（稼働中・削除済み）との重複チェック
+    // 新規手入力したchのうち、選択移動対象に含まれていない既存機器との重複チェック
     const existingConflicts = [];
     for (const row of validRows) {
       const trimmed = row.id.trim();
+      if (selectedMoveIds.includes(trimmed)) continue;
       const found = list.find(d => d.id === trimmed);
       if (found) {
         existingConflicts.push(found);
@@ -1142,10 +1235,18 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
       if (!confirm(confirmMsg)) return;
     }
 
+    // モニタ自体もマスタに保存（後から全chを他へ移動してもモニタが消えないように保持）
+    await saveMonitorDoc(newDeviceBase.ward, newDeviceBase.monitorGroup);
+
     let currentMaxSort = list.length > 0 ? Math.max(...list.map((d) => d.sortOrder || 0)) : 0;
+
+    // 1. 新規手入力分の保存
     for (const row of validRows) {
       const trimmed = row.id.trim();
       const existingDevice = list.find(d => d.id === trimmed);
+      if (existingDevice && !existingDevice.isDeleted && existingDevice.ward && existingDevice.monitorGroup) {
+        await saveMonitorDoc(existingDevice.ward, existingDevice.monitorGroup);
+      }
       currentMaxSort++;
       const newDevice = {
         ...newDeviceBase,
@@ -1157,7 +1258,32 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
       };
       await onSave(newDevice);
     }
-    alert(`${validRows.length}件の送信機を登録しました`);
+
+    // 2. 既存モニタから選択したchの移動（一括更新）
+    for (const dev of moveDevices) {
+      // 手入力側にも同じchがあった場合は二重保存を避ける
+      if (validRows.some(r => r.id.trim() === dev.id)) continue;
+      if (dev.ward && dev.monitorGroup) {
+        await saveMonitorDoc(dev.ward, dev.monitorGroup);
+      }
+      currentMaxSort++;
+      const movedDevice = {
+        ...dev,
+        ward: newDeviceBase.ward,
+        monitorGroup: newDeviceBase.monitorGroup,
+        sortOrder: currentMaxSort,
+        isDeleted: false,
+        deletedAt: null
+      };
+      await onSave(movedDevice);
+    }
+
+    setExpandedWards(prev => ({ ...prev, [newDeviceBase.ward]: true }));
+
+    const msgParts = [];
+    if (validRows.length > 0) msgParts.push(`新規登録: ${validRows.length}件`);
+    if (moveDevices.length > 0) msgParts.push(`他モニタからの移動: ${moveDevices.length}件`);
+    alert(`「${newDeviceBase.ward} / ${newDeviceBase.monitorGroup}」へ保存しました（${msgParts.join('、')}）`);
     setAddMode(null);
   };
 
@@ -1215,6 +1341,12 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
       }
     }
 
+    await saveMonitorDoc(trimmedWard, targetMonitorGroup);
+    if (editItem.ward && editItem.monitorGroup) {
+      // 移動元のモニタも消えないようmonitorsコレクションに保持
+      await saveMonitorDoc(editItem.ward, editItem.monitorGroup);
+    }
+
     const updatedDevice = {
       ...editItem,
       id: trimmedId,
@@ -1234,7 +1366,7 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
     setOriginalId('');
   };
 
-  // モニタ名変更・モニタごとの病棟移動（関連デバイス一括更新）
+  // モニタ名変更・モニタごとの病棟移動（関連デバイス一括更新＋単体モニタ対応）
   const handleUpdateMonitorName = async () => {
     if (!editingMonitor || !editingMonitor.model || !editingMonitor.serial.trim()) {
       return alert('モニタ型番と製造番号を入力してください');
@@ -1256,8 +1388,8 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
     );
 
     const confirmMsg = isWardChanged
-      ? `モニタ「${editingMonitor.oldName}」と紐付く送信機（${targets.length}台）を\n「${editingMonitor.oldWard}」→「${newWard} / ${newName}」へ移動・更新します。\nよろしいですか？`
-      : `「${editingMonitor.oldName}」を「${newName}」に変更します。\n紐付いている全ての送信機（${targets.length}台）が更新されますがよろしいですか？`;
+      ? `モニタ「${editingMonitor.oldName}」${targets.length > 0 ? `と紐付く送信機（${targets.length}台）` : ''}を\n「${editingMonitor.oldWard}」→「${newWard} / ${newName}」へ移動・更新します。\nよろしいですか？`
+      : `「${editingMonitor.oldName}」を「${newName}」に変更します。\n${targets.length > 0 ? `紐付いている全ての送信機（${targets.length}台）が更新されますが` : ''}よろしいですか？`;
 
     if (!confirm(confirmMsg)) return;
 
@@ -1268,7 +1400,21 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
         monitorGroup: newName
       });
     });
+
+    // モニタマスタ（monitorsコレクション）の更新
+    const oldMonitorDocId = getMonitorDocId(editingMonitor.oldWard, editingMonitor.oldName);
+    const newMonitorDocId = getMonitorDocId(newWard, newName);
+    if (oldMonitorDocId !== newMonitorDocId) {
+      batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', oldMonitorDocId));
+    }
+    batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', newMonitorDocId), {
+      ward: newWard,
+      name: newName,
+      updatedAt: getTodayString()
+    });
+
     await batch.commit();
+    setExpandedWards(prev => ({ ...prev, [newWard]: true }));
     setEditingMonitor(null);
   };
 
@@ -1396,16 +1542,22 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
       touchWardRef.current = null;
   };
   
-  // 病棟 > モニタ > 機器 の階層データ生成
+  // 病棟 > モニタ > 機器 の階層データ生成（単体登録されたモニタも含む）
   const devicesByWardAndMonitor = useMemo(() => {
     const wardGroups = {};
+    monitorList.forEach((m) => {
+      if (!m.ward || !m.name) return;
+      if (filterText && !m.ward.includes(filterText) && !m.name.includes(filterText)) return;
+      if (!wardGroups[m.ward]) wardGroups[m.ward] = {};
+      if (!wardGroups[m.ward][m.name]) wardGroups[m.ward][m.name] = [];
+    });
     displayList.forEach((d) => {
       if (!wardGroups[d.ward]) wardGroups[d.ward] = {};
       if (!wardGroups[d.ward][d.monitorGroup]) wardGroups[d.ward][d.monitorGroup] = [];
       wardGroups[d.ward][d.monitorGroup].push(d);
     });
     return wardGroups;
-  }, [displayList]);
+  }, [displayList, monitorList, filterText]);
 
   // マスタ順序に基づいた病棟リスト生成
   const sortedWards = useMemo(() => {
@@ -1422,12 +1574,37 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
     });
   }, [devicesByWardAndMonitor, wardList]);
 
+  // Step 3 の「既存の他モニタから選択して移動」用のグルーピングリスト
+  const movableMonitorGroups = useMemo(() => {
+    const groups = {};
+    const candidates = activeList.filter(d => {
+      // 現在登録・移動先となっている同一病棟・同一モニタの機器は除外
+      if (d.ward === newDeviceBase.ward && d.monitorGroup === newDeviceBase.monitorGroup) return false;
+      if (moveFilterWard !== 'ALL' && d.ward !== moveFilterWard) return false;
+      if (moveSearchText.trim() !== '') {
+        const q = moveSearchText.trim();
+        if (!d.id.includes(q) && !d.monitorGroup.includes(q) && !d.ward.includes(q)) return false;
+      }
+      return true;
+    });
+    candidates.forEach(d => {
+      const key = `${d.ward} / ${d.monitorGroup}`;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(d);
+    });
+    return groups;
+  }, [activeList, newDeviceBase, moveFilterWard, moveSearchText]);
+
   // 新規追加モードのレンダリング
   if (addMode) {
+    const validManualCount = deviceRows.filter(r => r.id.trim() !== '').length;
+    const totalTargetChCount = validManualCount + selectedMoveIds.filter(id => !deviceRows.some(r => r.id.trim() === id)).length;
+    const canCompleteWithoutCh = addMode === 'MONITOR' || addMode === 'WARD' || monitorMode === 'NEW';
+
     return (
       <div className="bg-white p-6 rounded-lg shadow-lg border border-gray-200">
         <div className="flex items-center gap-2 mb-4 pb-2 border-b">
-          <h3 className="text-xl font-bold">{addMode === 'WARD' ? '新規病棟の開設' : addMode === 'MONITOR' ? '新規モニタの追加' : '送信機の追加'} <span className="text-sm font-normal text-gray-500 ml-2">(Step {addStep}/3)</span></h3>
+          <h3 className="text-xl font-bold">{addMode === 'WARD' ? '新規病棟の開設' : addMode === 'MONITOR' ? '新規モニタの追加' : '送信機の追加・移動'} <span className="text-sm font-normal text-gray-500 ml-2">(Step {addStep}/3)</span></h3>
         </div>
         {addStep === 1 && (
           <div className="space-y-4 animate-fade-in">
@@ -1463,80 +1640,251 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
             {monitorMode === 'NEW' && (
               <div className="bg-gray-50 p-4 rounded border space-y-4 animate-slide-up">
                 <div className="grid grid-cols-2 gap-4">
-                  <div><label className="block text-xs font-bold text-gray-700 mb-1">モニタ型番</label><select className="w-full border p-2 rounded" value={newMonitorModel} onChange={e => setNewMonitorModel(e.target.value)}><option value="">選択してください</option>{monitorModelsList.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
-                  <div><label className="block text-xs font-bold text-gray-700 mb-1">製造番号</label><input className="w-full border p-2 rounded" placeholder="例: 01677" value={newMonitorSerial} onChange={e => setNewMonitorSerial(e.target.value)}/></div>
+                  <div><label className="block text-xs font-bold text-gray-700 mb-1">モニタ型番</label><select className="w-full border p-2 rounded bg-white" value={newMonitorModel} onChange={e => setNewMonitorModel(e.target.value)}><option value="">選択してください</option>{monitorModelsList.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
+                  <div><label className="block text-xs font-bold text-gray-700 mb-1">製造番号</label><input className="w-full border p-2 rounded bg-white" placeholder="例: 01677" value={newMonitorSerial} onChange={e => setNewMonitorSerial(e.target.value)}/></div>
                 </div>
+                <p className="text-xs text-gray-500">
+                  ※chを登録せずモニタ単体で登録する場合は下の「モニタ単体で登録」を押してください。既存の他モニタからchを選んで移動させる場合や新規chを入力する場合は「次へ」進んでください。
+                </p>
               </div>
             )}
           </div>
         )}
         {addStep === 3 && (
           <div className="space-y-4 animate-fade-in">
-            <h4 className="font-bold text-gray-700">3. 送信機(ch)を入力して登録完了</h4>
-            <div className="bg-blue-50 p-4 rounded-lg text-sm text-blue-800 mb-4 border border-blue-100"><p className="font-bold mb-1">確認:</p><ul className="list-disc pl-5 space-y-1"><li>病棟: {newDeviceBase.ward}</li><li>モニタ: {newDeviceBase.monitorGroup}</li></ul></div>
-            <div className="space-y-3">
-              <div className="grid grid-cols-12 gap-2 text-xs font-bold text-gray-500 px-1"><div className="col-span-6">ch (管理番号)</div><div className="col-span-5">型番</div><div className="col-span-1"></div></div>
-              {deviceRows.map((row, index) => {
-                const trimmed = row.id.trim();
-                const isDupInForm = trimmed !== '' && deviceRows.some((r, idx) => idx !== index && r.id.trim() === trimmed);
-                const existingMatch = trimmed !== '' ? list.find(d => d.id === trimmed) : null;
+            <h4 className="font-bold text-gray-700">3. 送信機(ch)の設定（他モニタから移動 / 新規入力）</h4>
+            <div className="bg-blue-50 p-3 rounded-lg text-sm text-blue-800 border border-blue-100 flex flex-wrap justify-between items-center gap-2">
+              <div>
+                <span className="font-bold mr-2">登録先:</span>
+                <span>{newDeviceBase.ward} / <span className="font-mono font-bold">{newDeviceBase.monitorGroup}</span></span>
+              </div>
+              {canCompleteWithoutCh && totalTargetChCount === 0 && (
+                <span className="text-xs bg-white text-blue-700 px-2 py-0.5 rounded border border-blue-200 font-bold">
+                  ch未選択のままモニタ単体登録も可能
+                </span>
+              )}
+            </div>
 
-                return (
-                  <div key={index} className="space-y-1">
-                    <div className="grid grid-cols-12 gap-2 items-center">
-                      <div className="col-span-6">
-                        <input
-                          className={`w-full border p-2 rounded font-mono ${
-                            isDupInForm
-                              ? 'border-red-500 bg-red-50'
-                              : existingMatch
-                                ? 'border-amber-500 bg-amber-50'
-                                : ''
-                          }`}
-                          placeholder="例: 1001"
-                          value={row.id}
-                          onChange={e => updateRow(index, 'id', e.target.value)}
-                          autoFocus={index === deviceRows.length - 1}
-                        />
-                      </div>
-                      <div className="col-span-5">
-                        <select className="w-full border p-2 rounded" value={row.model} onChange={e => updateRow(index, 'model', e.target.value)}>
-                          {transmitterModelsList.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
-                        </select>
-                      </div>
-                      <div className="col-span-1 flex justify-center">
-                        {deviceRows.length > 1 && (
-                          <button onClick={() => removeRow(index)} className="text-red-400 hover:text-red-600 p-1">
-                            <Trash2 size={18}/>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    {isDupInForm && (
-                      <div className="text-xs text-red-600 font-bold flex items-center gap-1 pl-1">
-                        <AlertTriangle size={13} /> この入力画面内で同じ ch:{trimmed} が重複しています
-                      </div>
-                    )}
-                    {!isDupInForm && existingMatch && (
-                      <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 flex items-center gap-1">
-                        <AlertTriangle size={13} className="flex-shrink-0 text-amber-600" />
-                        <span>
-                          {existingMatch.isDeleted
-                            ? `ch:${trimmed} は削除済み機器（旧: ${existingMatch.ward} / ${existingMatch.monitorGroup}）に存在します（登録時に復元・上書き確認を行います）`
-                            : `ch:${trimmed} はすでに「${existingMatch.ward} / ${existingMatch.monitorGroup}」に存在します（登録時に移動・上書き確認を行います）`}
-                        </span>
-                      </div>
+            {/* 入力方法切替タブ */}
+            <div className="flex bg-gray-100 p-1 rounded-lg">
+              <button
+                type="button"
+                onClick={() => setStep3Tab('MOVE_EXISTING')}
+                className={`flex-1 py-2 rounded-md text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  step3Tab === 'MOVE_EXISTING' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <span>既存の他モニタから選択して移動</span>
+                {selectedMoveIds.length > 0 && (
+                  <span className="bg-blue-600 text-white text-[11px] px-1.5 py-0.2 rounded-full">
+                    {selectedMoveIds.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep3Tab('NEW')}
+                className={`flex-1 py-2 rounded-md text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  step3Tab === 'NEW' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <span>新規chを手入力</span>
+                {validManualCount > 0 && (
+                  <span className="bg-green-600 text-white text-[11px] px-1.5 py-0.2 rounded-full">
+                    {validManualCount}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {step3Tab === 'MOVE_EXISTING' ? (
+              <div className="space-y-3">
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <select
+                    className="border p-2 rounded text-sm bg-white sm:w-44"
+                    value={moveFilterWard}
+                    onChange={e => setMoveFilterWard(e.target.value)}
+                  >
+                    <option value="ALL">すべての病棟を表示</option>
+                    {allWards.map(w => <option key={w} value={w}>{w}</option>)}
+                  </select>
+                  <div className="relative flex-1">
+                    <Search className="absolute left-2.5 top-2.5 text-gray-400" size={16} />
+                    <input
+                      type="text"
+                      placeholder="移動したいch番号やモニタ名で検索..."
+                      value={moveSearchText}
+                      onChange={e => setMoveSearchText(e.target.value)}
+                      className="w-full pl-8 pr-7 py-1.5 border rounded text-sm bg-white"
+                    />
+                    {moveSearchText && (
+                      <button onClick={() => setMoveSearchText('')} className="absolute right-2 top-2 text-gray-400 hover:text-gray-600">
+                        <X size={16} />
+                      </button>
                     )}
                   </div>
-                );
-              })}
-              <button onClick={addRow} className="w-full py-2 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-colors flex items-center justify-center gap-2"><Plus size={16}/> 機器を追加</button>
-            </div>
+                </div>
+
+                {selectedMoveIds.length > 0 && (
+                  <div className="bg-green-50 border border-green-200 rounded-lg px-3 py-2 flex justify-between items-center text-xs text-green-800">
+                    <span className="font-bold">
+                      移動対象として {selectedMoveIds.length} 台を選択中（ch: {selectedMoveIds.join(', ')}）
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMoveIds([])}
+                      className="text-green-700 hover:underline font-bold ml-2 whitespace-nowrap"
+                    >
+                      選択解除
+                    </button>
+                  </div>
+                )}
+
+                <div className="max-h-64 overflow-y-auto space-y-3 pr-1">
+                  {Object.keys(movableMonitorGroups).length > 0 ? (
+                    Object.entries(movableMonitorGroups).map(([groupTitle, groupDevs]) => {
+                      const groupIds = groupDevs.map(d => d.id);
+                      const allSelected = groupIds.every(id => selectedMoveIds.includes(id));
+                      return (
+                        <div key={groupTitle} className="border rounded-lg overflow-hidden bg-gray-50">
+                          <div className="bg-gray-100 px-3 py-1.5 border-b flex justify-between items-center">
+                            <span className="text-xs font-bold text-gray-700 flex items-center gap-1.5">
+                              <Monitor size={13} className="text-gray-500" />
+                              {groupTitle}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (allSelected) {
+                                  setSelectedMoveIds(prev => prev.filter(id => !groupIds.includes(id)));
+                                } else {
+                                  setSelectedMoveIds(prev => Array.from(new Set([...prev, ...groupIds])));
+                                }
+                              }}
+                              className="text-[11px] text-blue-600 hover:underline font-bold"
+                            >
+                              {allSelected ? 'すべて解除' : 'このモニタのchをすべて選択'}
+                            </button>
+                          </div>
+                          <div className="p-2 grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                            {groupDevs.map(d => {
+                              const isSelected = selectedMoveIds.includes(d.id);
+                              return (
+                                <button
+                                  key={d.id}
+                                  type="button"
+                                  onClick={() => toggleSelectMoveId(d.id)}
+                                  className={`p-2 rounded border text-left flex items-center justify-between transition-all ${
+                                    isSelected
+                                      ? 'bg-blue-600 border-blue-600 text-white font-bold shadow-sm'
+                                      : 'bg-white border-gray-200 text-gray-700 hover:border-blue-300 hover:bg-blue-50/40'
+                                  }`}
+                                >
+                                  <div className="min-w-0">
+                                    <div className="font-mono text-xs sm:text-sm">ch:{d.id}</div>
+                                    <div className={`text-[10px] truncate ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>{d.model}</div>
+                                  </div>
+                                  <CheckCircle size={15} className={`flex-shrink-0 ${isSelected ? 'text-white' : 'text-gray-200'}`} />
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-center py-8 text-gray-400 text-sm bg-gray-50 rounded border border-dashed">
+                      移動可能な他のモニタの送信機が見つかりません
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="grid grid-cols-12 gap-2 text-xs font-bold text-gray-500 px-1"><div className="col-span-6">ch (管理番号)</div><div className="col-span-5">型番</div><div className="col-span-1"></div></div>
+                {deviceRows.map((row, index) => {
+                  const trimmed = row.id.trim();
+                  const isDupInForm = trimmed !== '' && deviceRows.some((r, idx) => idx !== index && r.id.trim() === trimmed);
+                  const existingMatch = trimmed !== '' ? list.find(d => d.id === trimmed) : null;
+
+                  return (
+                    <div key={index} className="space-y-1">
+                      <div className="grid grid-cols-12 gap-2 items-center">
+                        <div className="col-span-6">
+                          <input
+                            className={`w-full border p-2 rounded font-mono ${
+                              isDupInForm
+                                ? 'border-red-500 bg-red-50'
+                                : existingMatch
+                                  ? 'border-amber-500 bg-amber-50'
+                                  : ''
+                            }`}
+                            placeholder="例: 1001"
+                            value={row.id}
+                            onChange={e => updateRow(index, 'id', e.target.value)}
+                            autoFocus={index === deviceRows.length - 1}
+                          />
+                        </div>
+                        <div className="col-span-5">
+                          <select className="w-full border p-2 rounded" value={row.model} onChange={e => updateRow(index, 'model', e.target.value)}>
+                            {transmitterModelsList.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                          </select>
+                        </div>
+                        <div className="col-span-1 flex justify-center">
+                          {deviceRows.length > 1 && (
+                            <button onClick={() => removeRow(index)} className="text-red-400 hover:text-red-600 p-1">
+                              <Trash2 size={18}/>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {isDupInForm && (
+                        <div className="text-xs text-red-600 font-bold flex items-center gap-1 pl-1">
+                          <AlertTriangle size={13} /> この入力画面内で同じ ch:{trimmed} が重複しています
+                        </div>
+                      )}
+                      {!isDupInForm && existingMatch && (
+                        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 flex items-center gap-1">
+                          <AlertTriangle size={13} className="flex-shrink-0 text-amber-600" />
+                          <span>
+                            {existingMatch.isDeleted
+                              ? `ch:${trimmed} は削除済み機器（旧: ${existingMatch.ward} / ${existingMatch.monitorGroup}）に存在します（登録時に復元・上書き確認を行います）`
+                              : `ch:${trimmed} はすでに「${existingMatch.ward} / ${existingMatch.monitorGroup}」に存在します（登録時に移動・上書き確認を行います）`}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <button onClick={addRow} className="w-full py-2 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-colors flex items-center justify-center gap-2"><Plus size={16}/> 機器を追加</button>
+              </div>
+            )}
           </div>
         )}
-        <div className="flex justify-between mt-8 pt-4 border-t">
+        <div className="flex justify-between items-center mt-8 pt-4 border-t gap-2">
            {addStep > 1 ? <button onClick={() => setAddStep(s => s - 1)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded flex items-center gap-1"><ArrowLeft size={16}/> 戻る</button> : <button onClick={() => setAddMode(null)} className="px-4 py-2 text-gray-500 hover:bg-gray-100 rounded">キャンセル</button>}
-           {addStep < 3 ? <button onClick={handleNextStep} className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1">次へ <ArrowRight size={16}/></button> : <button onClick={handleCompleteAdd} className="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 flex items-center gap-1 font-bold"><Save size={16}/> 登録完了</button>}
+           <div className="flex items-center gap-2">
+             {addStep === 2 && monitorMode === 'NEW' && (
+               <button
+                 onClick={handleCompleteMonitorOnly}
+                 className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 flex items-center gap-1 text-sm font-bold"
+               >
+                 <Save size={16}/> モニタ単体で登録
+               </button>
+             )}
+             {addStep < 3 ? (
+               <button onClick={handleNextStep} className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1 font-bold">
+                 次へ <ArrowRight size={16}/>
+               </button>
+             ) : (
+               <button onClick={handleCompleteAdd} className="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 flex items-center gap-1 font-bold">
+                 <Save size={16}/>
+                 {totalTargetChCount === 0 && canCompleteWithoutCh
+                   ? 'モニタ単体で登録完了'
+                   : `登録完了${totalTargetChCount > 0 ? ` (${totalTargetChCount}台)` : ''}`}
+               </button>
+             )}
+           </div>
         </div>
       </div>
     );
@@ -1788,27 +2136,62 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
                 <div className="p-3 bg-white space-y-4 animate-slide-up">
                   {Object.entries(monitorGroups).map(([monitorName, monitorDevices]) => (
                     <div key={monitorName} className="border rounded-md overflow-hidden">
-                      <div className="bg-gray-100 px-3 py-2 flex items-center justify-between">
-                        <div className="flex items-center gap-2 text-sm font-bold text-gray-700"><Monitor size={14} className="text-green-600"/>{monitorName}</div>
-                        <button
-                          onClick={() => {
-                            const match = monitorName.match(/^(.+)\s\((.+)\)$/);
-                            setEditingMonitor({
-                              oldWard: ward,
-                              ward: ward,
-                              wardMode: 'EXISTING',
-                              oldName: monitorName,
-                              model: match ? match[1] : monitorName,
-                              serial: match ? match[2] : ''
-                            });
-                          }}
-                          className="text-xs flex items-center gap-1 bg-white border px-2 py-1 rounded hover:bg-blue-50 text-blue-600 transition-colors"
-                        >
-                          <Edit2 size={12}/> 編集・移動
-                        </button>
+                      <div className="bg-gray-100 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 text-sm font-bold text-gray-700">
+                          <Monitor size={14} className="text-green-600"/>
+                          <span>{monitorName}</span>
+                          <span className="text-xs font-normal text-gray-500 bg-white px-1.5 py-0.5 rounded border">
+                            {monitorDevices.length}台
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => {
+                              const defaultModel = transmitterModelsList.length > 0 ? transmitterModelsList[0].name : '';
+                              setNewDeviceBase({ ward, monitorGroup: monitorName });
+                              setDeviceRows([{ id: '', model: defaultModel }]);
+                              setMonitorMode('EXISTING');
+                              setSelectedMoveIds([]);
+                              setMoveFilterWard('ALL');
+                              setMoveSearchText('');
+                              setStep3Tab('MOVE_EXISTING');
+                              setAddMode('DEVICE');
+                              setAddStep(3);
+                            }}
+                            className="text-xs flex items-center gap-1 bg-white border border-green-300 px-2 py-1 rounded hover:bg-green-50 text-green-700 font-bold transition-colors"
+                            title="他モニタからchを移動または新規追加"
+                          >
+                            <Plus size={12}/> ch移動・追加
+                          </button>
+                          <button
+                            onClick={() => {
+                              const match = monitorName.match(/^(.+)\s\((.+)\)$/);
+                              setEditingMonitor({
+                                oldWard: ward,
+                                ward: ward,
+                                wardMode: 'EXISTING',
+                                oldName: monitorName,
+                                model: match ? match[1] : monitorName,
+                                serial: match ? match[2] : ''
+                              });
+                            }}
+                            className="text-xs flex items-center gap-1 bg-white border px-2 py-1 rounded hover:bg-blue-50 text-blue-600 transition-colors"
+                          >
+                            <Edit2 size={12}/> 編集・移動
+                          </button>
+                          {monitorDevices.length === 0 && (
+                            <button
+                              onClick={() => handleDeleteEmptyMonitor(ward, monitorName)}
+                              className="text-xs flex items-center gap-1 bg-white border border-red-200 px-2 py-1 rounded hover:bg-red-50 text-red-600 transition-colors"
+                              title="空のモニタを削除"
+                            >
+                              <Trash2 size={12}/>
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div className="divide-y divide-gray-100 relative">
-                        {monitorDevices.map(d => (
+                        {monitorDevices.length > 0 ? monitorDevices.map(d => (
                           <div 
                             key={d.id} 
                             data-device-id={d.id} 
@@ -1832,7 +2215,11 @@ function DeviceMasterEditor({ list, models, wardList, onSave, onDelete, onRestor
                               <button onClick={() => onDelete(d.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors" title="削除"><Trash2 size={16}/></button>
                             </div>
                           </div>
-                        ))}
+                        )) : (
+                          <div className="p-4 text-center text-xs text-gray-400 bg-gray-50/40">
+                            送信機が登録されていません（上の「＋ch移動・追加」から既存のchを選択して移動できます）
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
