@@ -40,6 +40,16 @@ const getTodayString = (dateObj = new Date()) => {
   return `${y}-${m}-${d}`;
 };
 
+// Helper: CSVセルエスケープ処理（カンマ・改行・ダブルクォーテーション対策）
+const escapeCSVCell = (val) => {
+  if (val === null || val === undefined) return '';
+  const str = String(val);
+  if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+};
+
 function App() {
   // ユーザー認証・担当者情報
   const [user, setUser] = useState(null);
@@ -73,13 +83,30 @@ function App() {
   const mainScrollRef = useRef(null);
   const [showFooter, setShowFooter] = useState(true); // 初期値はTopにいるので表示
 
-  // アプリ起動時（またはリロード時）の日付で固定し、データ保存とクエリの日付を一致させる
-  const today = useMemo(() => getTodayString(), []);
+  // 本日の日付（日付またぎやスリープ復帰時に自動更新）
+  const [today, setToday] = useState(() => getTodayString());
 
-  // 時計の更新（1秒ごと）
+  // 時計の更新（1秒ごと）＋日付またぎ・スリープ復帰時の日付自動更新
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
+    const checkTimeAndDate = () => {
+      const now = new Date();
+      setCurrentTime(now);
+      const currentDayStr = getTodayString(now);
+      setToday(prev => (prev !== currentDayStr ? currentDayStr : prev));
+    };
+    const timer = setInterval(checkTimeAndDate, 1000);
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        checkTimeAndDate();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+    };
   }, []);
 
   // 担当者名のローカルストレージへの永続化と日付変更時のリセット処理
@@ -93,6 +120,7 @@ function App() {
               } else {
                   // 日付が変わっている場合はリセット
                   localStorage.removeItem('g2d_staff_curr');
+                  setCurrentStaff('');
               }
           } catch (e) {
               console.error("Storage parse error", e);
@@ -141,7 +169,7 @@ function App() {
     // 3. Models (型番マスタ)
     // 修正: sortOrder順にソートするよう修正
     const unsubModels = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'transmitter_models'), (snapshot) => {
-      const list = snapshot.docs.map(d => d.data());
+      const list = snapshot.docs.map(d => ({ ...d.data(), id: d.id }));
       list.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
       setTransmitterModels(list);
     }, (error) => console.error("Models sync error", error));
@@ -292,10 +320,10 @@ function App() {
         r.date, r.timestamp.split(' ')[1] || '', ward, r.checker, monitor, r.deviceId, model,
         r.inUse === 'YES' ? '使用中' : '未使用',
         r.reception === 'GOOD' ? '良好' : (r.reception === 'BAD' ? '不良' : '-'),
-        badReason, `"${r.note || ''}"`,
+        badReason, r.note || '',
         r.isBroken === 'YES' ? '破損あり' : (r.isBroken === 'NO' ? 'なし' : '-'),
         r.channelCheck === 'OK' ? 'OK' : (r.channelCheck === 'NG' ? 'NG' : '-'),
-      ].join(',');
+      ].map(escapeCSVCell).join(',');
     };
 
     const activeRecords = [];
@@ -311,12 +339,12 @@ function App() {
 
     const rows = activeRecords.map(formatRow);
     if (deletedRecords.length > 0) {
-      rows.push(['【削除済み機器】', ...Array(header.length - 1).fill('')].join(','));
+      rows.push(['【削除済み機器】', ...Array(header.length - 1).fill('')].map(escapeCSVCell).join(','));
       rows.push(...deletedRecords.map(formatRow));
     }
 
     // Windows対策: BOM (0xEF, 0xBB, 0xBF) を付与
-    const csvContent = [header.join(','), ...rows].join('\n');
+    const csvContent = [header.map(escapeCSVCell).join(','), ...rows].join('\n');
     const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
     const blob = new Blob([bom, csvContent], { type: "text/csv;charset=utf-8" });
     
@@ -966,6 +994,10 @@ function SettingsModal({ devices, staffList, transmitterModels, wardList, monito
   };
   const handleRestoreDevice = async (id) => {
     const targetDevice = devices.find(d => d.id === id);
+    const locationLabel = targetDevice ? `「${targetDevice.ward} / ${targetDevice.monitorGroup}」` : '元の所属先';
+    if (!confirm(`ch:${id} を元所属 ${locationLabel} に復元しますか？\n（※別の病棟やモニタへ移動して復元したい場合は、キャンセルして「移動して復元」を押してください）`)) {
+      return;
+    }
     if (targetDevice?.ward && targetDevice?.monitorGroup) {
       const monitorDocId = encodeURIComponent(`${targetDevice.ward}__${targetDevice.monitorGroup}`);
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', monitorDocId), {
@@ -994,9 +1026,71 @@ function SettingsModal({ devices, staffList, transmitterModels, wardList, monito
     if(confirm('本当に削除しますか？')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'staff', id));
   };
 
-  // 型番マスタ保存・削除
-  const handleSaveModel = async (model) => {
+  // 型番マスタ保存・削除（型番名変更時は既存の送信機・モニタの型番表記も一括更新）
+  const handleSaveModel = async (model, oldModel = null) => {
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', model.id), model);
+
+    if (oldModel && oldModel.name && oldModel.name !== model.name) {
+      const batch = writeBatch(db);
+      let hasBatchUpdates = false;
+
+      if (model.type === 'TRANSMITTER') {
+        devices.forEach(d => {
+          if (d.model === oldModel.name) {
+            batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', d.id), {
+              model: model.name
+            });
+            hasBatchUpdates = true;
+          }
+        });
+      } else if (model.type === 'MONITOR') {
+        const oldPrefix = `${oldModel.name} (`;
+        const replaceMonitorName = (name) => {
+          if (name === oldModel.name) return model.name;
+          if (name && name.startsWith(oldPrefix)) {
+            return `${model.name} (${name.slice(oldPrefix.length)}`;
+          }
+          return null;
+        };
+
+        devices.forEach(d => {
+          const updatedGroup = replaceMonitorName(d.monitorGroup);
+          if (updatedGroup) {
+            batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', d.id), {
+              monitorGroup: updatedGroup
+            });
+            hasBatchUpdates = true;
+          }
+        });
+
+        monitorList.forEach(m => {
+          const updatedName = replaceMonitorName(m.name);
+          if (updatedName && m.ward) {
+            const oldDocId = encodeURIComponent(`${m.ward}__${m.name}`);
+            const newDocId = encodeURIComponent(`${m.ward}__${updatedName}`);
+            if (oldDocId !== newDocId) {
+              batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', oldDocId), {
+                ward: m.ward,
+                name: m.name,
+                isDeleted: true,
+                deletedAt: getTodayString()
+              });
+              batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', newDocId), {
+                ward: m.ward,
+                name: updatedName,
+                isDeleted: false,
+                updatedAt: getTodayString()
+              });
+              hasBatchUpdates = true;
+            }
+          }
+        });
+      }
+
+      if (hasBatchUpdates) {
+        await batch.commit();
+      }
+    }
   };
   const handleDeleteModel = async (id) => {
     if(confirm('本当に削除しますか？')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', id));
@@ -1393,7 +1487,7 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
 
     await saveMonitorDoc(trimmedWard, targetMonitorGroup);
     const originalDevice = list.find(d => d.id === originalId);
-    if (originalDevice?.ward && originalDevice?.monitorGroup) {
+    if (originalDevice && !originalDevice.isDeleted && originalDevice.ward && originalDevice.monitorGroup) {
       // 移動元のモニタも消えないようmonitorsコレクションに保持
       await saveMonitorDoc(originalDevice.ward, originalDevice.monitorGroup);
     }
@@ -1964,7 +2058,10 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
       {editItem && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/20 backdrop-blur-[1px] p-4">
           <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md border space-y-4">
-            <h3 className="font-bold text-lg flex items-center gap-2"><Edit2 size={18} className="text-blue-600"/> 送信機の編集・移動</h3>
+            <h3 className="font-bold text-lg flex items-center gap-2">
+              <Edit2 size={18} className="text-blue-600"/>
+              {editItem.isDeleted ? '削除済み送信機の復元・移動先選択' : '送信機の編集・移動'}
+            </h3>
             <div className="space-y-3">
                <div>
                  <label className="text-xs font-bold text-gray-600 block mb-1">ch (管理番号)</label>
@@ -2089,7 +2186,9 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
             </div>
             <div className="flex justify-end gap-2 pt-2 border-t">
                <button onClick={() => setEditItem(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
-               <button onClick={handleUpdate} className="px-4 py-2 bg-blue-600 text-white rounded font-bold hover:bg-blue-700">更新・移動する</button>
+               <button onClick={handleUpdate} className="px-4 py-2 bg-blue-600 text-white rounded font-bold hover:bg-blue-700">
+                 {editItem.isDeleted ? 'この内容で復元する' : '更新・移動する'}
+               </button>
             </div>
           </div>
         </div>
@@ -2312,10 +2411,18 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
                   </div>
                   <div className="flex items-center gap-2 self-end sm:self-center">
                     <button
+                      onClick={() => handleStartEdit(d)}
+                      className="text-xs bg-white text-blue-600 border border-blue-200 px-2.5 py-1 rounded hover:bg-blue-50 font-bold transition-colors"
+                      title="別の病棟・モニタを選択して復元"
+                    >
+                      移動して復元
+                    </button>
+                    <button
                       onClick={() => onRestore(d.id)}
                       className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-2.5 py-1 rounded hover:bg-blue-100 font-bold transition-colors"
+                      title="元の所属へ復元"
                     >
-                      復元する
+                      元所属へ復元
                     </button>
                     <button
                       onClick={() => onPermanentDelete(d.id)}
@@ -2479,10 +2586,14 @@ function TransmitterModelEditor({ list, onSave, onDelete }) {
     else setFormData({ id: '', name: '', type: 'TRANSMITTER' });
   }, [editItem]);
 
-  // 新規追加・更新処理 (sortOrder付与)
+  // 新規追加・更新処理 (sortOrder付与・スラッシュ等の記号対応・既存機器への型番名反映)
   const handleSubmit = async () => {
-    // 新規追加時はformData、編集時はeditItemをベースにするが、IDは変更不可
-    const itemToSave = editItem ? { ...formData } : { ...formData, id: formData.name }; 
+    const trimmedName = formData.name.trim();
+    if (!trimmedName) return;
+
+    // 新規追加時はスラッシュ等を含んでも安全なIDを生成、編集時は既存IDを維持
+    const safeId = editItem ? editItem.id : encodeURIComponent(trimmedName);
+    const itemToSave = { ...formData, name: trimmedName, id: safeId };
     
     // 新規追加時のsortOrder自動採番
     if (!itemToSave.sortOrder && !editItem) {
@@ -2490,7 +2601,7 @@ function TransmitterModelEditor({ list, onSave, onDelete }) {
         itemToSave.sortOrder = maxSort + 1;
     }
 
-    await onSave(itemToSave);
+    await onSave(itemToSave, editItem);
     setFormData({ id: '', name: '', type: 'TRANSMITTER' });
     setEditItem(null);
   };
@@ -2901,7 +3012,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
           entry.deviceId,
           entry.model,
           ...formatDayCells(entry.records)
-      ].join(','));
+      ].map(escapeCSVCell).join(','));
 
       const deletedRows = sortEntries(deletedEntries).map(entry => [
           entry.ward,
@@ -2909,16 +3020,16 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
           entry.deviceId,
           entry.model,
           ...formatDayCells(entry.records)
-      ].join(','));
+      ].map(escapeCSVCell).join(','));
 
       const rows = [...activeRows];
       if (deletedRows.length > 0) {
-          rows.push(['【削除済み機器】', '', '', '', ...days.map(() => '')].join(','));
+          rows.push(['【削除済み機器】', '', '', '', ...days.map(() => '')].map(escapeCSVCell).join(','));
           rows.push(...deletedRows);
       }
 
       // BOMを付与してBlobを作成する方式
-      const csvString = [header.join(','), ...rows].join('\n');
+      const csvString = [header.map(escapeCSVCell).join(','), ...rows].join('\n');
       const bom = new Uint8Array([0xEF, 0xBB, 0xBF]); // BOM (Byte Order Mark)
       const blob = new Blob([bom, csvString], { type: "text/csv;charset=utf-8" });
 
