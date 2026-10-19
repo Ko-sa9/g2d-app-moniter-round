@@ -200,11 +200,35 @@ function App() {
   // 有効な機器（論理削除されていない機器）のみを抽出
   const activeDevices = useMemo(() => devices.filter(d => !d.isDeleted), [devices]);
 
+  // 有効なモニタ一覧（明示的に削除されていないモニタマスタ＋機器マスタ由来のモニタ）
+  // ※過去にchが全削除されたモニタも、モニタ自体が削除されていなければ0台モニタとして保持・復元する
+  const effectiveMonitors = useMemo(() => {
+    const deletedKeys = new Set(
+      monitorList.filter(m => m.isDeleted).map(m => `${m.ward}__${m.name}`)
+    );
+    const map = new Map();
+    monitorList.forEach(m => {
+      if (!m.isDeleted && m.ward && m.name) {
+        map.set(`${m.ward}__${m.name}`, { ward: m.ward, name: m.name });
+      }
+    });
+    devices.forEach(d => {
+      if (!d.ward || !d.monitorGroup) return;
+      const key = `${d.ward}__${d.monitorGroup}`;
+      if (!d.isDeleted || !deletedKeys.has(key)) {
+        if (!map.has(key)) {
+          map.set(key, { ward: d.ward, name: d.monitorGroup });
+        }
+      }
+    });
+    return Array.from(map.values());
+  }, [monitorList, devices]);
+
   // 病棟リストの生成（マスタの表示順序を反映、モニタ単体登録のある病棟も含む）
   const wards = useMemo(() => {
     const list = Array.from(new Set([
       ...activeDevices.map(d => d.ward),
-      ...monitorList.map(m => m.ward)
+      ...effectiveMonitors.map(m => m.ward)
     ])).filter(Boolean);
     
     // DBのwardListがある場合はそのsortOrderを優先
@@ -218,7 +242,7 @@ function App() {
       if (orderA !== orderB) return orderA - orderB;
       return a.localeCompare(b);
     });
-  }, [activeDevices, monitorList, wardList]);
+  }, [activeDevices, effectiveMonitors, wardList]);
 
   // 選択中の病棟でフィルタリングされたデバイスリスト
   const filteredDevices = useMemo(() => {
@@ -227,11 +251,11 @@ function App() {
     return list;
   }, [selectedWard, activeDevices]); 
 
-  // モニタグループごとにデバイスをまとめる（単体登録モニタも含む）
+  // モニタグループごとにデバイスをまとめる（単体登録・0台モニタも含む）
   const groupedDevices = useMemo(() => {
     if (!selectedWard) return null; 
     const groups = {};
-    monitorList.filter(m => m.ward === selectedWard).forEach(m => {
+    effectiveMonitors.filter(m => m.ward === selectedWard).forEach(m => {
       if (m.name && !groups[m.name]) groups[m.name] = [];
     });
     filteredDevices.forEach(device => {
@@ -239,7 +263,7 @@ function App() {
       groups[device.monitorGroup].push(device);
     });
     return groups;
-  }, [selectedWard, filteredDevices, monitorList]);
+  }, [selectedWard, filteredDevices, effectiveMonitors]);
 
   // 全体の進捗率計算
   const totalProgress = useMemo(() => {
@@ -635,7 +659,7 @@ function App() {
       )}
 
       {/* 設定モーダル */}
-      {showSettings && <SettingsModal devices={devices} staffList={staffList} transmitterModels={transmitterModels} wardList={wardList} monitorList={monitorList} onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsModal devices={devices} staffList={staffList} transmitterModels={transmitterModels} wardList={wardList} monitorList={effectiveMonitors} onClose={() => setShowSettings(false)} />}
       
       {/* 履歴・分析モーダル */}
       {showHistory && <HistoryModal db={db} appId={appId} devices={devices} wardList={wardList} onClose={() => setShowHistory(false)} onDownloadCSV={handleDownloadCSV} />}
@@ -923,7 +947,17 @@ function SettingsModal({ devices, staffList, transmitterModels, wardList, monito
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'devices', device.id), device);
   };
   const handleDeleteDevice = async (id) => {
-    if (confirm(`ch:${id} を削除しますか？\n（※過去の点検記録は保持され、月報CSV等の末尾に「削除済み機器」として出力されます）`)) {
+    if (confirm(`ch:${id} を削除しますか？\n（※所属モニタはそのまま残り、過去の点検記録も保持されます）`)) {
+      const targetDevice = devices.find(d => d.id === id);
+      if (targetDevice?.ward && targetDevice?.monitorGroup) {
+        const monitorDocId = encodeURIComponent(`${targetDevice.ward}__${targetDevice.monitorGroup}`);
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', monitorDocId), {
+          ward: targetDevice.ward,
+          name: targetDevice.monitorGroup,
+          isDeleted: false,
+          updatedAt: getTodayString()
+        });
+      }
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'devices', id), {
         isDeleted: true,
         deletedAt: getTodayString()
@@ -931,6 +965,16 @@ function SettingsModal({ devices, staffList, transmitterModels, wardList, monito
     }
   };
   const handleRestoreDevice = async (id) => {
+    const targetDevice = devices.find(d => d.id === id);
+    if (targetDevice?.ward && targetDevice?.monitorGroup) {
+      const monitorDocId = encodeURIComponent(`${targetDevice.ward}__${targetDevice.monitorGroup}`);
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', monitorDocId), {
+        ward: targetDevice.ward,
+        name: targetDevice.monitorGroup,
+        isDeleted: false,
+        updatedAt: getTodayString()
+      });
+    }
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'devices', id), {
       isDeleted: false,
       deletedAt: null
@@ -1038,6 +1082,7 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', docId), {
       ward: trimmedWard,
       name: trimmedMonitor,
+      isDeleted: false,
       updatedAt: getTodayString()
     });
     if (!wardList.some(w => w.name === trimmedWard)) {
@@ -1052,7 +1097,12 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
   const handleDeleteEmptyMonitor = async (ward, monitorName) => {
     if (!confirm(`モニタ「${ward} / ${monitorName}」を削除しますか？`)) return;
     const docId = getMonitorDocId(ward, monitorName);
-    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', docId));
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', docId), {
+      ward,
+      name: monitorName,
+      isDeleted: true,
+      deletedAt: getTodayString()
+    });
   };
 
   useEffect(() => {
@@ -1342,9 +1392,10 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
     }
 
     await saveMonitorDoc(trimmedWard, targetMonitorGroup);
-    if (editItem.ward && editItem.monitorGroup) {
+    const originalDevice = list.find(d => d.id === originalId);
+    if (originalDevice?.ward && originalDevice?.monitorGroup) {
       // 移動元のモニタも消えないようmonitorsコレクションに保持
-      await saveMonitorDoc(editItem.ward, editItem.monitorGroup);
+      await saveMonitorDoc(originalDevice.ward, originalDevice.monitorGroup);
     }
 
     const updatedDevice = {
@@ -1405,11 +1456,17 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
     const oldMonitorDocId = getMonitorDocId(editingMonitor.oldWard, editingMonitor.oldName);
     const newMonitorDocId = getMonitorDocId(newWard, newName);
     if (oldMonitorDocId !== newMonitorDocId) {
-      batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', oldMonitorDocId));
+      batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', oldMonitorDocId), {
+        ward: editingMonitor.oldWard,
+        name: editingMonitor.oldName,
+        isDeleted: true,
+        deletedAt: getTodayString()
+      });
     }
     batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', newMonitorDocId), {
       ward: newWard,
       name: newName,
+      isDeleted: false,
       updatedAt: getTodayString()
     });
 
