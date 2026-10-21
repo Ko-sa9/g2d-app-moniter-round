@@ -58,6 +58,47 @@ const isStandbyWard = (ward) => {
   return upper === 'ME室' || upper.startsWith('ME室') || trimmed.includes('待機');
 };
 
+// Helper: 指定した点検日(recordDate: YYYY-MM-DD)時点で機器が削除済み扱いとなるか判定
+// ※後から削除された機器でも、削除日(deletedAt)より前の過去日の日報・履歴では通常稼働機器として扱う
+const isDeviceDeletedOnDate = (deviceMaster, recordDate) => {
+  if (!deviceMaster) return true;
+  if (!deviceMaster.isDeleted) return false;
+  if (deviceMaster.deletedAt && recordDate && recordDate < deviceMaster.deletedAt) {
+    return false;
+  }
+  return true;
+};
+
+// Helper: 指定した対象月(monthStr: YYYY-MM)において機器が削除済み扱いとなるか判定
+// ※後から削除された機器でも、削除月より前の過去月の月報では通常稼働機器として扱う
+const isDeviceDeletedInMonth = (deviceMaster, monthStr) => {
+  if (!deviceMaster) return true;
+  if (!deviceMaster.isDeleted) return false;
+  if (deviceMaster.deletedAt && monthStr && monthStr < deviceMaster.deletedAt.slice(0, 7)) {
+    return false;
+  }
+  return true;
+};
+
+// Helper: Firestore writeBatchの上限(500件)を考慮して分割コミットするヘルパー
+const commitBatchUpdates = async (firestoreDb, updateList) => {
+  const CHUNK_SIZE = 450;
+  for (let i = 0; i < updateList.length; i += CHUNK_SIZE) {
+    const chunk = updateList.slice(i, i + CHUNK_SIZE);
+    const batch = writeBatch(firestoreDb);
+    chunk.forEach(op => {
+      if (op.type === 'set') {
+        batch.set(op.ref, op.data, op.options || {});
+      } else if (op.type === 'update') {
+        batch.update(op.ref, op.data);
+      } else if (op.type === 'delete') {
+        batch.delete(op.ref);
+      }
+    });
+    await batch.commit();
+  }
+};
+
 function App() {
   // ユーザー認証・担当者情報
   const [user, setUser] = useState(null);
@@ -69,7 +110,7 @@ function App() {
   const [transmitterModels, setTransmitterModels] = useState([]);
   const [wardList, setWardList] = useState([]); // 病棟マスタ（表示順序保持用）
   const [monitorList, setMonitorList] = useState([]); // モニタマスタ（単体登録モニタ保持用）
-  const [records, setRecords] = useState({}); // 本日の点検記録
+  const [todayRecordsList, setTodayRecordsList] = useState([]); // 本日の点検記録リスト（同日複数病棟での点検に対応）
 
   // UI状態管理
   const [selectedWard, setSelectedWard] = useState(null);
@@ -196,12 +237,11 @@ function App() {
       setMonitorList(list);
     }, (error) => console.error("Monitors sync error", error));
 
-    // 6. Checks (本日の点検記録)
+    // 6. Checks (本日の点検記録: 同日中に別病棟へ移動して2回点検された場合もすべて取得・保持)
     const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'checks'), where('date', '==', today));
     const unsubChecks = onSnapshot(q, (snapshot) => {
-      const recs = {};
-      snapshot.docs.forEach(d => { recs[d.data().deviceId] = d.data(); });
-      setRecords(recs);
+      const list = snapshot.docs.map(d => ({ ...d.data(), _docId: d.id }));
+      setTodayRecordsList(list);
     }, (error) => console.error("Checks sync error", error));
 
     return () => { unsubDevices(); unsubStaff(); unsubModels(); unsubWards(); unsubMonitors(); unsubChecks(); };
@@ -236,10 +276,45 @@ function App() {
   // 有効な機器（論理削除されていない機器）のみを抽出
   const activeDevices = useMemo(() => devices.filter(d => !d.isDeleted), [devices]);
 
-  // 日常のラウンド点検対象となる機器（ME室などの待機場所にある機器は進捗分母から除外）
+  // デバイスIDごとの本日の全点検記録マップ（同日中に複数病棟で実施された場合は複数件保持）
+  const recordsByDevice = useMemo(() => {
+    const map = {};
+    todayRecordsList.forEach(r => {
+      if (!map[r.deviceId]) map[r.deviceId] = [];
+      map[r.deviceId].push(r);
+    });
+    return map;
+  }, [todayRecordsList]);
+
+  // 指定デバイスが本日（いずれかの病棟で）1回以上点検済みかどうか
+  const hasRecordToday = (deviceId) => Boolean(recordsByDevice[deviceId] && recordsByDevice[deviceId].length > 0);
+
+  // 指定デバイスの「現在の所属（病棟・モニタ）」に対応する本日の点検記録を取得
+  const getRecordForDeviceLocation = (device) => {
+    if (!device) return null;
+    const devRecs = recordsByDevice[device.id] || [];
+    const exact = devRecs.find(
+      r => r.ward === device.ward && r.monitorGroup === device.monitorGroup
+    );
+    if (exact) return exact;
+    const legacy = devRecs.find(r => !r.ward && !r.monitorGroup);
+    return legacy || null;
+  };
+
+  // 指定デバイスが本日「別の病棟・モニタ（移動前など）」で点検された記録の一覧を取得
+  const getOtherLocationRecordsToday = (device) => {
+    if (!device) return [];
+    const devRecs = recordsByDevice[device.id] || [];
+    return devRecs.filter(
+      r => (r.ward || '') !== (device.ward || '') || (r.monitorGroup || '') !== (device.monitorGroup || '')
+    );
+  };
+
+  // 日常のラウンド点検対象となる機器
+  // ※ME室などの待機場所にある機器は原則除外するが、「当日すでに点検済みの機器がME室へ返却された場合」は当日点検分としてカウントに残す
   const roundTargetDevices = useMemo(
-    () => activeDevices.filter(d => !isStandbyWard(d.ward)),
-    [activeDevices]
+    () => activeDevices.filter(d => !isStandbyWard(d.ward) || Boolean(recordsByDevice[d.id] && recordsByDevice[d.id].length > 0)),
+    [activeDevices, recordsByDevice]
   );
 
   // 貸出機として登録されている（またはME室に所属・待機履歴がある）モニタ名のセット
@@ -331,18 +406,48 @@ function App() {
     return groups;
   }, [selectedWard, filteredDevices, effectiveMonitors]);
 
-  // 全体の進捗率計算（ME室などの待機中機器は分母から除外）
+  // 全体の進捗率計算（待機中機器は原則除外、ただし本日点検済みのままME室へ返却された機器はカウントに残す）
   const totalProgress = useMemo(() => {
     if (roundTargetDevices.length === 0) return 0;
-    const checkedCount = roundTargetDevices.filter(d => records[d.id]).length;
+    const checkedCount = roundTargetDevices.filter(d => Boolean(recordsByDevice[d.id] && recordsByDevice[d.id].length > 0)).length;
     return Math.round((checkedCount / roundTargetDevices.length) * 100);
-  }, [roundTargetDevices, records]);
+  }, [roundTargetDevices, recordsByDevice]);
 
   // CSVダウンロード処理 (日報)
   const handleDownloadCSV = (targetRecords, fileNameDate) => {
     const list = Array.isArray(targetRecords) ? targetRecords : Object.values(targetRecords);
     const header = ['点検日', '時間', '病棟', '点検者', 'モニタ', 'ch', '送信機型番', '①使用中', '②受信状態', '不良理由', '備考', '③破損', '④ch確認'];
     
+    const getWardOrder = (wardName) => {
+      const w = wardList.find(item => item.name === wardName);
+      return w ? (w.sortOrder ?? 9999) : (isStandbyWard(wardName) ? 99999 : 9999);
+    };
+    const getDeviceOrder = (deviceId) => {
+      const d = devices.find(dev => dev.id === deviceId);
+      return d ? (d.sortOrder ?? 9999) : 9999;
+    };
+    const sortDailyRecords = (recs) => {
+      return [...recs].sort((a, b) => {
+        const deviceA = devices.find(d => d.id === a.deviceId);
+        const deviceB = devices.find(d => d.id === b.deviceId);
+        const wardA = a.ward || deviceA?.ward || '';
+        const wardB = b.ward || deviceB?.ward || '';
+        const monA = a.monitorGroup || deviceA?.monitorGroup || '';
+        const monB = b.monitorGroup || deviceB?.monitorGroup || '';
+
+        const wa = getWardOrder(wardA);
+        const wb = getWardOrder(wardB);
+        if (wa !== wb) return wa - wb;
+        if (wardA !== wardB) return wardA.localeCompare(wardB);
+        if (monA !== monB) return monA.localeCompare(monB);
+
+        const da = getDeviceOrder(a.deviceId);
+        const db = getDeviceOrder(b.deviceId);
+        if (da !== db) return da - db;
+        return a.deviceId.localeCompare(b.deviceId);
+      });
+    };
+
     const formatRow = (r) => {
       const deviceMaster = devices.find(d => d.id === r.deviceId);
       const model = r.model || deviceMaster?.model || '';
@@ -368,17 +473,18 @@ function App() {
     const deletedRecords = [];
     list.forEach(r => {
       const deviceMaster = devices.find(d => d.id === r.deviceId);
-      if (!deviceMaster || deviceMaster.isDeleted) {
+      // 点検日(r.date)時点で削除済みだったかどうかで判定（後から削除されたchが過去の日報で削除済み扱いになるのを防ぐ）
+      if (isDeviceDeletedOnDate(deviceMaster, r.date || fileNameDate)) {
         deletedRecords.push(r);
       } else {
         activeRecords.push(r);
       }
     });
 
-    const rows = activeRecords.map(formatRow);
+    const rows = sortDailyRecords(activeRecords).map(formatRow);
     if (deletedRecords.length > 0) {
       rows.push(['【削除済み機器】', ...Array(header.length - 1).fill('')].map(escapeCSVCell).join(','));
-      rows.push(...deletedRecords.map(formatRow));
+      rows.push(...sortDailyRecords(deletedRecords).map(formatRow));
     }
 
     // Windows対策: BOM (0xEF, 0xBB, 0xBF) を付与
@@ -421,9 +527,26 @@ function App() {
     if (record.inUse !== null) {
         const deviceMaster = devices.find(d => d.id === record.deviceId);
         if(deviceMaster) {
-            const docId = `${record.date}_${record.deviceId}`;
+            const devRecs = recordsByDevice[record.deviceId] || [];
+            // 同じ日・同じ病棟・同じモニタでの記録が既にある場合はそのドキュメントを上書き更新
+            const existingSameLoc = devRecs.find(
+              r => r.ward === deviceMaster.ward && r.monitorGroup === deviceMaster.monitorGroup
+            ) || devRecs.find(r => !r.ward && !r.monitorGroup);
+
+            let docId;
+            if (existingSameLoc && existingSameLoc._docId) {
+              docId = existingSameLoc._docId;
+            } else if (devRecs.length === 0) {
+              // 当日1件目の点検は従来通りのID形式
+              docId = `${record.date}_${record.deviceId}`;
+            } else {
+              // 当日すでに別病棟・別モニタで点検済みで、移動先で再実施した場合は2件目として別IDで保存（両方残す）
+              docId = `${record.date}_${record.deviceId}_${encodeURIComponent(`${deviceMaster.ward}__${deviceMaster.monitorGroup}`)}`;
+            }
+
+            const { _docId, ...cleanRecord } = record;
             const recordWithSnapshot = { 
-                ...record, 
+                ...cleanRecord, 
                 model: deviceMaster.model, 
                 monitorGroup: deviceMaster.monitorGroup, 
                 ward: deviceMaster.ward 
@@ -456,7 +579,7 @@ function App() {
   // 点検記録の削除処理
   const handleDeleteRecord = async (record) => {
     if(confirm('この点検記録を取り消しますか？\nデータは削除され「未実施」に戻ります。')) {
-      const docId = `${record.date}_${record.deviceId}`;
+      const docId = record._docId || `${record.date}_${record.deviceId}`;
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checks', docId));
     }
   };
@@ -518,16 +641,16 @@ function App() {
                   <div className="h-full bg-green-500 transition-all duration-500 ease-out" style={{ width: `${totalProgress}%` }} />
                 </div>
                 <div className="text-right text-xs text-gray-400 mt-1">
-                  {roundTargetDevices.filter(d => records[d.id]).length} / {roundTargetDevices.length} 台
+                  {roundTargetDevices.filter(d => hasRecordToday(d.id)).length} / {roundTargetDevices.length} 台
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 {wards.filter(w => !isStandbyWard(w)).map(ward => {
-                    // ★病棟ごとの進捗計算
+                    // ★病棟ごとの進捗計算（現在の病棟で点検済みの台数）
                     const wardDevices = activeDevices.filter(d => d.ward === ward);
                     const wardTotal = wardDevices.length;
-                    const wardChecked = wardDevices.filter(d => records[d.id]).length;
+                    const wardChecked = wardDevices.filter(d => Boolean(getRecordForDeviceLocation(d))).length;
                     const wardProgress = wardTotal > 0 ? Math.round((wardChecked / wardTotal) * 100) : 0;
                     const hasLoanerInWard = effectiveMonitors.some(m => m.ward === ward && m.isLoaner);
                     
@@ -566,6 +689,7 @@ function App() {
                     {wards.filter(w => isStandbyWard(w)).map(ward => {
                       const standbyMonitors = effectiveMonitors.filter(m => m.ward === ward);
                       const standbyDevices = activeDevices.filter(d => d.ward === ward);
+                      const checkedBeforeReturnCount = standbyDevices.filter(d => hasRecordToday(d.id)).length;
                       return (
                         <button
                           key={ward}
@@ -573,11 +697,16 @@ function App() {
                           className="p-3.5 bg-gray-100/80 rounded-lg border border-dashed border-gray-300 hover:border-blue-300 hover:bg-white transition-all active:scale-95 text-left flex items-center justify-between"
                         >
                           <div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-bold text-gray-700">{ward}</span>
                               <span className="text-[11px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full font-bold">
                                 待機中・点検対象外
                               </span>
+                              {checkedBeforeReturnCount > 0 && (
+                                <span className="text-[11px] bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-bold">
+                                  本日点検後に返却: {checkedBeforeReturnCount}台（全体進捗に算入済）
+                                </span>
+                              )}
                             </div>
                             <div className="text-xs text-gray-500 mt-1">
                               待機モニタ: <span className="font-bold text-gray-700">{standbyMonitors.length}</span>台 / 送信機: <span className="font-bold text-gray-700">{standbyDevices.length}</span>台
@@ -616,7 +745,7 @@ function App() {
                     </span>
                   ) : (
                     <span className="text-xs font-mono text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded ml-1">
-                      {filteredDevices.filter(d => records[d.id]).length}/{filteredDevices.length}
+                      {filteredDevices.filter(d => Boolean(getRecordForDeviceLocation(d))).length}/{filteredDevices.length}
                     </span>
                   )}
                 </div>
@@ -625,7 +754,7 @@ function App() {
               {isStandbyWard(selectedWard) && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 flex items-center justify-between gap-2">
                   <span>
-                    <strong>{selectedWard}</strong>で待機中の機器は本日の点検進捗（％）の対象外です。病棟へ貸し出す際は「設定（⚙️）＞ 機器マスタ」から移動してください。
+                    <strong>{selectedWard}</strong>で待機中の機器は本日の点検進捗（％）の対象外です（ただし本日病棟で点検したあとに返却された機器は本日分の点検カウントに残ります）。病棟へ貸し出す際は「設定（⚙️）＞ 機器マスタ」から移動してください。
                   </span>
                   <button
                     onClick={() => setShowSettings(true)}
@@ -664,7 +793,8 @@ function App() {
                             <DeviceRow 
                               key={device.id} 
                               device={device} 
-                              record={records[device.id]} 
+                              record={getRecordForDeviceLocation(device)}
+                              otherTodayRecords={getOtherLocationRecordsToday(device)}
                               isExpanded={selectedDevice?.id === device.id}
                               onToggle={() => toggleDevice(device)}
                               onSave={handleSaveRecord}
@@ -689,7 +819,8 @@ function App() {
                         <DeviceRow 
                             key={device.id} 
                             device={device} 
-                            record={records[device.id]} 
+                            record={getRecordForDeviceLocation(device)}
+                            otherTodayRecords={getOtherLocationRecordsToday(device)}
                             isExpanded={selectedDevice?.id === device.id}
                             onToggle={() => toggleDevice(device)}
                             onSave={handleSaveRecord}
@@ -738,7 +869,7 @@ function App() {
                     {wards.map(ward => {
                       const wardDevices = activeDevices.filter(d => d.ward === ward);
                       const wardTotal = wardDevices.length;
-                      const wardChecked = wardDevices.filter(d => records[d.id]).length;
+                      const wardChecked = wardDevices.filter(d => Boolean(getRecordForDeviceLocation(d))).length;
                       const wardProgress = wardTotal > 0 ? Math.round((wardChecked / wardTotal) * 100) : 0;
                       const isCurrent = ward === selectedWard;
                       const isStandby = isStandbyWard(ward);
@@ -815,7 +946,7 @@ function App() {
                 </span>
               ) : (
                 <span className="text-xs font-mono font-bold bg-white/20 px-2 py-0.5 rounded-full">
-                  {filteredDevices.filter(d => records[d.id]).length}/{filteredDevices.length}
+                  {filteredDevices.filter(d => Boolean(getRecordForDeviceLocation(d))).length}/{filteredDevices.length}
                 </span>
               )}
               <ChevronUp
@@ -864,8 +995,10 @@ function App() {
 // --- Sub Components ---
 
 // DeviceRow: リストの各行コンポーネント。クリックでインラインフォームを展開。
-function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onShowHistory, checker, isFirst, isLast, date }) {
+function DeviceRow({ device, record, otherTodayRecords = [], isExpanded, onToggle, onSave, onDelete, onShowHistory, checker, isFirst, isLast, date }) {
   const isChecked = !!record;
+  const hasOtherTodayRecord = otherTodayRecords.length > 0;
+  const otherWardsLabel = Array.from(new Set(otherTodayRecords.map(r => r.ward).filter(Boolean))).join('・');
   const rowRef = useRef(null);
   
   // 展開時に自動スクロール
@@ -903,15 +1036,20 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onS
         `}
       >
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className={`text-xl font-bold font-mono ${isChecked ? (hasIssue ? 'text-red-700' : (hasNote ? 'text-orange-700' : 'text-green-700')) : 'text-gray-800'}`}>ch: {device.id}</span>
             {isChecked && !hasIssue && <CheckCircle size={18} className={hasNote ? 'text-orange-500' : 'text-green-600'} />}
             {hasIssue && <AlertTriangle size={18} className="text-red-500" />}
+            {hasOtherTodayRecord && (
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                本日「{otherWardsLabel}」で点検済
+              </span>
+            )}
             
             {/* 詳細履歴アイコンボタン */}
             <button 
                 onClick={(e) => { e.stopPropagation(); onShowHistory(); }} 
-                className="ml-2 p-1.5 rounded-full text-gray-400 hover:bg-blue-100 hover:text-blue-600 transition-colors"
+                className="ml-1 p-1.5 rounded-full text-gray-400 hover:bg-blue-100 hover:text-blue-600 transition-colors"
                 title="過去の履歴を表示"
             >
                 <Info size={18} />
@@ -933,6 +1071,11 @@ function DeviceRow({ device, record, isExpanded, onToggle, onSave, onDelete, onS
 
       {isExpanded && (
         <div className="border-t border-blue-100 p-4 bg-white rounded-b-lg animate-slide-up">
+            {hasOtherTodayRecord && (
+              <div className="mb-4 p-2.5 rounded-lg bg-indigo-50 border border-indigo-200 text-xs text-indigo-800">
+                <strong>同日移動の履歴あり:</strong> 本日すでに「{otherTodayRecords.map(r => `${r.ward} / ${r.monitorGroup}`).join('、')}」で点検記録があります。ここで保存すると、移動前の記録も残したまま現在の病棟（{device.ward}）の点検記録が追加保存され、<strong>両方の記録が残ります</strong>。
+              </div>
+            )}
             <CheckInlineForm 
                 device={device}
                 initialData={record}
@@ -1182,23 +1325,40 @@ function SettingsModal({ devices, staffList, transmitterModels, wardList, monito
     if(confirm('本当に削除しますか？')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'staff', id));
   };
 
-  // 型番マスタ保存・削除（型番名変更時は既存の送信機・モニタの型番表記も一括更新）
+  // 型番マスタ保存・削除（型番名変更時は既存の送信機・モニタ・過去の点検記録の型番表記も一括更新し、月報で行が分裂するのを防ぐ）
   const handleSaveModel = async (model, oldModel = null) => {
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transmitter_models', model.id), model);
 
     if (oldModel && oldModel.name && oldModel.name !== model.name) {
-      const batch = writeBatch(db);
-      let hasBatchUpdates = false;
+      const updates = [];
 
       if (model.type === 'TRANSMITTER') {
         devices.forEach(d => {
           if (d.model === oldModel.name) {
-            batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', d.id), {
-              model: model.name
+            updates.push({
+              type: 'update',
+              ref: doc(db, 'artifacts', appId, 'public', 'data', 'devices', d.id),
+              data: { model: model.name }
             });
-            hasBatchUpdates = true;
           }
         });
+
+        try {
+          const checksQ = query(
+            collection(db, 'artifacts', appId, 'public', 'data', 'checks'),
+            where('model', '==', oldModel.name)
+          );
+          const checksSnap = await getDocs(checksQ);
+          checksSnap.docs.forEach(checkDoc => {
+            updates.push({
+              type: 'update',
+              ref: doc(db, 'artifacts', appId, 'public', 'data', 'checks', checkDoc.id),
+              data: { model: model.name }
+            });
+          });
+        } catch (e) {
+          console.error('Failed to cascade transmitter model rename to checks:', e);
+        }
       } else if (model.type === 'MONITOR') {
         const oldPrefix = `${oldModel.name} (`;
         const replaceMonitorName = (name) => {
@@ -1212,10 +1372,11 @@ function SettingsModal({ devices, staffList, transmitterModels, wardList, monito
         devices.forEach(d => {
           const updatedGroup = replaceMonitorName(d.monitorGroup);
           if (updatedGroup) {
-            batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', d.id), {
-              monitorGroup: updatedGroup
+            updates.push({
+              type: 'update',
+              ref: doc(db, 'artifacts', appId, 'public', 'data', 'devices', d.id),
+              data: { monitorGroup: updatedGroup }
             });
-            hasBatchUpdates = true;
           }
         });
 
@@ -1225,26 +1386,52 @@ function SettingsModal({ devices, staffList, transmitterModels, wardList, monito
             const oldDocId = encodeURIComponent(`${m.ward}__${m.name}`);
             const newDocId = encodeURIComponent(`${m.ward}__${updatedName}`);
             if (oldDocId !== newDocId) {
-              batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', oldDocId), {
-                ward: m.ward,
-                name: m.name,
-                isDeleted: true,
-                deletedAt: getTodayString()
+              updates.push({
+                type: 'set',
+                ref: doc(db, 'artifacts', appId, 'public', 'data', 'monitors', oldDocId),
+                data: {
+                  ward: m.ward,
+                  name: m.name,
+                  isLoaner: Boolean(m.isLoaner),
+                  isDeleted: true,
+                  deletedAt: getTodayString()
+                }
               });
-              batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', newDocId), {
-                ward: m.ward,
-                name: updatedName,
-                isDeleted: false,
-                updatedAt: getTodayString()
+              updates.push({
+                type: 'set',
+                ref: doc(db, 'artifacts', appId, 'public', 'data', 'monitors', newDocId),
+                data: {
+                  ward: m.ward,
+                  name: updatedName,
+                  isLoaner: Boolean(m.isLoaner),
+                  isDeleted: false,
+                  updatedAt: getTodayString()
+                }
               });
-              hasBatchUpdates = true;
             }
           }
         });
+
+        try {
+          const allChecksSnap = await getDocs(query(collection(db, 'artifacts', appId, 'public', 'data', 'checks')));
+          allChecksSnap.docs.forEach(checkDoc => {
+            const data = checkDoc.data();
+            const updatedGroup = replaceMonitorName(data.monitorGroup);
+            if (updatedGroup) {
+              updates.push({
+                type: 'update',
+                ref: doc(db, 'artifacts', appId, 'public', 'data', 'checks', checkDoc.id),
+                data: { monitorGroup: updatedGroup }
+              });
+            }
+          });
+        } catch (e) {
+          console.error('Failed to cascade monitor model rename to checks:', e);
+        }
       }
 
-      if (hasBatchUpdates) {
-        await batch.commit();
+      if (updates.length > 0) {
+        await commitBatchUpdates(db, updates);
       }
     }
   };
@@ -1758,6 +1945,35 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
     }
 
     await batch.commit();
+
+    // モニタ名（型番・製造番号）を変更した場合、過去の点検記録(checks)のmonitorGroup名も統一して月報で行が2行に分裂するのを防ぐ
+    if (isNameChanged) {
+      try {
+        const checksQ = query(
+          collection(db, 'artifacts', appId, 'public', 'data', 'checks'),
+          where('monitorGroup', '==', editingMonitor.oldName)
+        );
+        const checksSnap = await getDocs(checksQ);
+        const checkUpdates = [];
+        checksSnap.docs.forEach(checkDoc => {
+          const rData = checkDoc.data();
+          // 同一モニタ（旧所属病棟または病棟未指定）の記録のモニタ名を新名称へ統一（当時のward自体は変更しない）
+          if (!rData.ward || rData.ward === editingMonitor.oldWard || !isWardChanged) {
+            checkUpdates.push({
+              type: 'update',
+              ref: doc(db, 'artifacts', appId, 'public', 'data', 'checks', checkDoc.id),
+              data: { monitorGroup: newName }
+            });
+          }
+        });
+        if (checkUpdates.length > 0) {
+          await commitBatchUpdates(db, checkUpdates);
+        }
+      } catch (e) {
+        console.error('Failed to cascade monitor rename to checks:', e);
+      }
+    }
+
     setExpandedWards(prev => ({ ...prev, [newWard]: true }));
     setEditingMonitor(null);
   };
@@ -3130,7 +3346,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
   
   const getWardSortOrder = (wardName) => {
     const w = wardList.find(w => w.name === wardName);
-    return w ? (w.sortOrder ?? 9999) : 9999;
+    return w ? (w.sortOrder ?? 9999) : (isStandbyWard(wardName) ? 99999 : 9999);
   };
 
   // 履歴のグルーピングとソート (日付 > 病棟 > モニタ > 機器)
@@ -3143,20 +3359,26 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
       groups[r.date].push(r);
     });
 
-    // 日付ごとにマスタ順でソート
+    // 日付ごとにマスタ順（病棟順 > モニタ名順 > 機器sortOrder順 > ch順）でソート
     Object.keys(groups).forEach(date => {
       groups[date].sort((a, b) => {
          // 1. 病棟順
          const wa = getWardSortOrder(a.ward);
          const wb = getWardSortOrder(b.ward);
          if (wa !== wb) return wa - wb;
+         if ((a.ward || '') !== (b.ward || '')) return (a.ward || '').localeCompare(b.ward || '');
+
+         // 2. モニタ名順（同一病棟内でモニタが混ざらないようまとめる）
+         if ((a.monitorGroup || '') !== (b.monitorGroup || '')) {
+           return (a.monitorGroup || '').localeCompare(b.monitorGroup || '');
+         }
          
-         // 2. 機器順 (sortOrder)
+         // 3. 機器順 (sortOrder)
          const da = getDeviceSortOrder(a.deviceId);
          const db = getDeviceSortOrder(b.deviceId);
          if (da !== db) return da - db; 
 
-         // 3. sortOrderが同じならID順
+         // 4. sortOrderが同じならID順
          return a.deviceId.localeCompare(b.deviceId);
       });
     });
@@ -3233,6 +3455,7 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
       if (!monthStr) return;
       
       const targetRecords = historyRecords.filter(r => r.date.startsWith(monthStr));
+      const currentMonthStr = getTodayString().slice(0, 7);
       
       const year = parseInt(monthStr.split('-')[0], 10);
       const month = parseInt(monthStr.split('-')[1], 10);
@@ -3270,11 +3493,13 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
           });
       };
 
-      // 1. 稼働中機器（Active Devices）の行生成（月途中の移動は移動前・移動後の病棟/モニタ別に行を分割）
-      const activeDevices = devices.filter(d => !d.isDeleted);
+      // 1. 対象月時点で稼働中の機器（Active Devices in target month）の行生成
+      // ※月途中の移動は移動前・移動後の病棟/モニタ別に行を分割
+      // ※翌月以降に論理削除された機器でも、削除月より前の過去月報では通常機器として出力する
+      const activeInMonthDevices = devices.filter(d => !isDeviceDeletedInMonth(d, monthStr));
       const activeEntries = [];
 
-      activeDevices.forEach(device => {
+      activeInMonthDevices.forEach(device => {
           const devRecords = targetRecords.filter(r => r.deviceId === device.id);
           const locationMap = new Map();
 
@@ -3295,9 +3520,19 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
               locationMap.get(key).records.push(r);
           });
 
-          // 現在の所属病棟・モニタがまだ含まれていない場合は追加（待機場所・ME室で点検実績0件の空行は除外）
+          // 現在の所属病棟・モニタでの空行追加判定:
+          // - 現在も未削除 (!device.isDeleted)
+          // - 待機場所(ME室)ではない (!isStandbyWard(device.ward))
+          // - 当月(または未来月)の月報である (monthStr >= currentMonthStr) ※過去月の月報に現在所属の空行が混ざるのを防止
+          // - 当月まだどの病棟でも1件も点検記録がない (locationMap.size === 0) ※移動直後で移動先未点検のときに空行が二重に出るのを防止
           const currentKey = `${device.ward}___${device.monitorGroup}`;
-          if (!locationMap.has(currentKey) && !isStandbyWard(device.ward)) {
+          if (
+              !device.isDeleted &&
+              !locationMap.has(currentKey) &&
+              !isStandbyWard(device.ward) &&
+              locationMap.size === 0 &&
+              monthStr >= currentMonthStr
+          ) {
               locationMap.set(currentKey, {
                   ward: device.ward,
                   monitorGroup: device.monitorGroup,
@@ -3312,10 +3547,11 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
       });
 
       // 2. 削除済み機器（Deleted Devices）の行生成（月報の最下部にまとめて出力）
+      // ※対象月に1回以上点検記録が存在する削除済み機器のみを出力（点検実績0件の空行は出力しない）
       const deletedEntries = [];
-      const softDeletedDevices = devices.filter(d => d.isDeleted);
+      const deletedInMonthDevices = devices.filter(d => isDeviceDeletedInMonth(d, monthStr));
 
-      softDeletedDevices.forEach(device => {
+      deletedInMonthDevices.forEach(device => {
           const devRecords = targetRecords.filter(r => r.deviceId === device.id);
           if (devRecords.length > 0) {
               const locationMap = new Map();
@@ -3336,19 +3572,10 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
                   locationMap.get(key).records.push(r);
               });
               locationMap.forEach(entry => deletedEntries.push(entry));
-          } else if (device.deletedAt && device.deletedAt.startsWith(monthStr)) {
-              deletedEntries.push({
-                  ward: device.ward,
-                  monitorGroup: device.monitorGroup,
-                  deviceId: device.id,
-                  model: device.model,
-                  sortOrder: device.sortOrder ?? 9999,
-                  records: []
-              });
           }
       });
 
-      // 過去に物理削除されマスタに存在しないが、当月の点検記録が残っている機器も抽出
+      // 過去に完全削除されマスタに存在しないが、対象月の点検記録が残っている機器も抽出
       const unknownDeviceMap = new Map();
       targetRecords.forEach(r => {
           if (!devices.some(d => d.id === r.deviceId)) {
@@ -3452,10 +3679,12 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
                     wardsData.flatMap(w => w.monitors.flatMap(m => m.records.map(r => r.checker)))
                 )).filter(Boolean).join(', ');
 
-                // 日ごとの統計計算
+                // 日ごとの統計計算（待機場所・ME室での誤入力分があれば稼働率計算の母数から除外）
                 const dailyRawRecords = historyRecords.filter(r => r.date === date);
-                const dailyTotal = dailyRawRecords.length;
-                const dailyInUse = dailyRawRecords.filter(r => r.inUse === 'YES').length;
+                const dailyTargetRecords = dailyRawRecords.filter(r => !isStandbyWard(r.ward));
+                const statsBase = dailyTargetRecords.length > 0 ? dailyTargetRecords : dailyRawRecords;
+                const dailyTotal = statsBase.length;
+                const dailyInUse = statsBase.filter(r => r.inUse === 'YES').length;
                 const dailyIssues = dailyRawRecords.filter(r => r.reception === 'BAD' || r.isBroken === 'YES' || r.channelCheck === 'NG').length;
                 const dailyUtilization = dailyTotal > 0 ? Math.round((dailyInUse / dailyTotal) * 100) : 0;
 
@@ -3519,7 +3748,8 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
                                                       if (r.receptionReason === 'D' && r.receptionNote) extraInfo.push(`その他理由: ${r.receptionNote}`);
                                                       if (r.note) extraInfo.push(`備考: ${r.note}`);
                                                       const deviceMaster = devices.find(d => d.id === r.deviceId);
-                                                      const isDeletedDevice = !deviceMaster || !!deviceMaster.isDeleted;
+                                                      const isDeletedOnThatDay = isDeviceDeletedOnDate(deviceMaster, r.date);
+                                                      const isDeletedLater = !isDeletedOnThatDay && (!deviceMaster || !!deviceMaster.isDeleted);
                                                       const isMovedDevice = deviceMaster && !deviceMaster.isDeleted && (deviceMaster.ward !== r.ward || deviceMaster.monitorGroup !== r.monitorGroup);
     
                                                       return (
@@ -3529,8 +3759,11 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
                                                                 <span className="text-gray-400 text-xs font-mono">{r.timestamp.split(' ')[1]}</span>
                                                                 <span className="font-bold w-16 text-lg">{r.deviceId}</span>
                                                                 <span className="text-xs text-gray-500">{r.model}</span>
-                                                                {isDeletedDevice && (
+                                                                {isDeletedOnThatDay && (
                                                                     <span className="text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded font-bold border border-gray-300">削除済</span>
+                                                                )}
+                                                                {isDeletedLater && (
+                                                                    <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded border border-gray-300">現在: 削除済 ({deviceMaster?.deletedAt})</span>
                                                                 )}
                                                                 {isMovedDevice && (
                                                                     <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200">現在: {deviceMaster.ward}</span>
@@ -3579,11 +3812,13 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
                 const targets = historyRecords.filter(r => r.date === date);
                 if(targets.length === 0) return alert('該当日のデータがありません');
                 
-                // 日報出力時もマスタ順にソートする
+                // 日報出力時もマスタ順（病棟順 > モニタ名順 > 機器sortOrder順 > ch順）にソートする
                 targets.sort((a, b) => {
                      const wa = getWardSortOrder(a.ward);
                      const wb = getWardSortOrder(b.ward);
                      if (wa !== wb) return wa - wb;
+                     if ((a.ward || '') !== (b.ward || '')) return (a.ward || '').localeCompare(b.ward || '');
+                     if ((a.monitorGroup || '') !== (b.monitorGroup || '')) return (a.monitorGroup || '').localeCompare(b.monitorGroup || '');
                      
                      const da = getDeviceSortOrder(a.deviceId);
                      const db = getDeviceSortOrder(b.deviceId);
