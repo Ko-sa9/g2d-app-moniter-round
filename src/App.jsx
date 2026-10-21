@@ -50,6 +50,14 @@ const escapeCSVCell = (val) => {
   return str;
 };
 
+// Helper: 待機場所（ME室など、日常のラウンド点検対象外となる場所）の判定
+const isStandbyWard = (ward) => {
+  if (!ward) return false;
+  const trimmed = ward.trim();
+  const upper = trimmed.toUpperCase();
+  return upper === 'ME室' || upper.startsWith('ME室') || trimmed.includes('待機');
+};
+
 function App() {
   // ユーザー認証・担当者情報
   const [user, setUser] = useState(null);
@@ -228,6 +236,28 @@ function App() {
   // 有効な機器（論理削除されていない機器）のみを抽出
   const activeDevices = useMemo(() => devices.filter(d => !d.isDeleted), [devices]);
 
+  // 日常のラウンド点検対象となる機器（ME室などの待機場所にある機器は進捗分母から除外）
+  const roundTargetDevices = useMemo(
+    () => activeDevices.filter(d => !isStandbyWard(d.ward)),
+    [activeDevices]
+  );
+
+  // 貸出機として登録されている（またはME室に所属・待機履歴がある）モニタ名のセット
+  const loanerMonitorNames = useMemo(() => {
+    const names = new Set();
+    monitorList.forEach(m => {
+      if (m.name && (m.isLoaner || isStandbyWard(m.ward))) {
+        names.add(m.name);
+      }
+    });
+    devices.forEach(d => {
+      if (d.monitorGroup && isStandbyWard(d.ward)) {
+        names.add(d.monitorGroup);
+      }
+    });
+    return names;
+  }, [monitorList, devices]);
+
   // 有効なモニタ一覧（明示的に削除されていないモニタマスタ＋機器マスタ由来のモニタ）
   // ※過去にchが全削除されたモニタも、モニタ自体が削除されていなければ0台モニタとして保持・復元する
   const effectiveMonitors = useMemo(() => {
@@ -237,7 +267,11 @@ function App() {
     const map = new Map();
     monitorList.forEach(m => {
       if (!m.isDeleted && m.ward && m.name) {
-        map.set(`${m.ward}__${m.name}`, { ward: m.ward, name: m.name });
+        map.set(`${m.ward}__${m.name}`, {
+          ward: m.ward,
+          name: m.name,
+          isLoaner: Boolean(m.isLoaner || loanerMonitorNames.has(m.name))
+        });
       }
     });
     devices.forEach(d => {
@@ -245,12 +279,16 @@ function App() {
       const key = `${d.ward}__${d.monitorGroup}`;
       if (!d.isDeleted || !deletedKeys.has(key)) {
         if (!map.has(key)) {
-          map.set(key, { ward: d.ward, name: d.monitorGroup });
+          map.set(key, {
+            ward: d.ward,
+            name: d.monitorGroup,
+            isLoaner: Boolean(loanerMonitorNames.has(d.monitorGroup))
+          });
         }
       }
     });
     return Array.from(map.values());
-  }, [monitorList, devices]);
+  }, [monitorList, devices, loanerMonitorNames]);
 
   // 病棟リストの生成（マスタの表示順序を反映、モニタ単体登録のある病棟も含む）
   const wards = useMemo(() => {
@@ -259,13 +297,13 @@ function App() {
       ...effectiveMonitors.map(m => m.ward)
     ])).filter(Boolean);
     
-    // DBのwardListがある場合はそのsortOrderを優先
+    // DBのwardListがある場合はそのsortOrderを優先（待機場所「ME室」はデフォルト末尾）
     return list.sort((a, b) => {
       const wa = wardList.find(w => w.name === a);
       const wb = wardList.find(w => w.name === b);
       
-      const orderA = wa ? (wa.sortOrder ?? 9999) : 9999;
-      const orderB = wb ? (wb.sortOrder ?? 9999) : 9999;
+      const orderA = wa ? (wa.sortOrder ?? 9999) : (isStandbyWard(a) ? 99999 : 9999);
+      const orderB = wb ? (wb.sortOrder ?? 9999) : (isStandbyWard(b) ? 99999 : 9999);
       
       if (orderA !== orderB) return orderA - orderB;
       return a.localeCompare(b);
@@ -293,12 +331,12 @@ function App() {
     return groups;
   }, [selectedWard, filteredDevices, effectiveMonitors]);
 
-  // 全体の進捗率計算
+  // 全体の進捗率計算（ME室などの待機中機器は分母から除外）
   const totalProgress = useMemo(() => {
-    if (activeDevices.length === 0) return 0;
-    const checkedCount = activeDevices.filter(d => records[d.id]).length;
-    return Math.round((checkedCount / activeDevices.length) * 100);
-  }, [activeDevices, records]);
+    if (roundTargetDevices.length === 0) return 0;
+    const checkedCount = roundTargetDevices.filter(d => records[d.id]).length;
+    return Math.round((checkedCount / roundTargetDevices.length) * 100);
+  }, [roundTargetDevices, records]);
 
   // CSVダウンロード処理 (日報)
   const handleDownloadCSV = (targetRecords, fileNameDate) => {
@@ -479,20 +517,30 @@ function App() {
                 <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
                   <div className="h-full bg-green-500 transition-all duration-500 ease-out" style={{ width: `${totalProgress}%` }} />
                 </div>
-                <div className="text-right text-xs text-gray-400 mt-1">{activeDevices.filter(d => records[d.id]).length} / {activeDevices.length} 台</div>
+                <div className="text-right text-xs text-gray-400 mt-1">
+                  {roundTargetDevices.filter(d => records[d.id]).length} / {roundTargetDevices.length} 台
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                {wards.map(ward => {
-                    // ★病棟ごとの進捗計算を追加
+                {wards.filter(w => !isStandbyWard(w)).map(ward => {
+                    // ★病棟ごとの進捗計算
                     const wardDevices = activeDevices.filter(d => d.ward === ward);
                     const wardTotal = wardDevices.length;
                     const wardChecked = wardDevices.filter(d => records[d.id]).length;
                     const wardProgress = wardTotal > 0 ? Math.round((wardChecked / wardTotal) * 100) : 0;
+                    const hasLoanerInWard = effectiveMonitors.some(m => m.ward === ward && m.isLoaner);
                     
                     return (
                       <button key={ward} onClick={() => setSelectedWard(ward)} className="p-4 bg-white rounded-lg shadow-sm border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all active:scale-95 text-left group">
-                        <span className="block text-lg font-bold text-gray-800 group-hover:text-blue-600 mb-2">{ward}</span>
+                        <div className="flex items-center justify-between gap-1 mb-2">
+                          <span className="block text-lg font-bold text-gray-800 group-hover:text-blue-600 truncate">{ward}</span>
+                          {hasLoanerInWard && (
+                            <span className="text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded flex-shrink-0">
+                              貸出機あり
+                            </span>
+                          )}
+                        </div>
                         
                         {/* 進捗バー表示 */}
                         <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden mb-1">
@@ -506,6 +554,42 @@ function App() {
                     );
                 })}
               </div>
+
+              {/* 待機場所（ME室など・点検対象外）の表示枠 */}
+              {wards.some(w => isStandbyWard(w)) && (
+                <div className="pt-2">
+                  <div className="text-xs font-bold text-gray-500 mb-2 flex items-center gap-1.5">
+                    <Server size={14} className="text-gray-400" />
+                    <span>貸出機待機場所（本日の点検対象外）</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {wards.filter(w => isStandbyWard(w)).map(ward => {
+                      const standbyMonitors = effectiveMonitors.filter(m => m.ward === ward);
+                      const standbyDevices = activeDevices.filter(d => d.ward === ward);
+                      return (
+                        <button
+                          key={ward}
+                          onClick={() => setSelectedWard(ward)}
+                          className="p-3.5 bg-gray-100/80 rounded-lg border border-dashed border-gray-300 hover:border-blue-300 hover:bg-white transition-all active:scale-95 text-left flex items-center justify-between"
+                        >
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-gray-700">{ward}</span>
+                              <span className="text-[11px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full font-bold">
+                                待機中・点検対象外
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-500 mt-1">
+                              待機モニタ: <span className="font-bold text-gray-700">{standbyMonitors.length}</span>台 / 送信機: <span className="font-bold text-gray-700">{standbyDevices.length}</span>台
+                            </div>
+                          </div>
+                          <ChevronRight size={18} className="text-gray-400" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             // 機器リスト表示画面（病棟選択後）
@@ -524,44 +608,80 @@ function App() {
                   <span>病棟一覧</span>
                 </button>
                 <div className="flex items-center gap-1.5 text-sm font-bold bg-white px-3.5 py-1.5 rounded-full shadow-sm border border-gray-200 text-gray-700">
-                  <MapPin size={14} className="text-blue-600" />
+                  <MapPin size={14} className={isStandbyWard(selectedWard) ? 'text-gray-500' : 'text-blue-600'} />
                   <span>{selectedWard}</span>
-                  <span className="text-xs font-mono text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded ml-1">
-                    {filteredDevices.filter(d => records[d.id]).length}/{filteredDevices.length}
-                  </span>
+                  {isStandbyWard(selectedWard) ? (
+                    <span className="text-xs font-bold text-gray-600 bg-gray-100 px-2 py-0.5 rounded ml-1">
+                      待機中（点検対象外）
+                    </span>
+                  ) : (
+                    <span className="text-xs font-mono text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded ml-1">
+                      {filteredDevices.filter(d => records[d.id]).length}/{filteredDevices.length}
+                    </span>
+                  )}
                 </div>
               </div>
+
+              {isStandbyWard(selectedWard) && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 flex items-center justify-between gap-2">
+                  <span>
+                    <strong>{selectedWard}</strong>で待機中の機器は本日の点検進捗（％）の対象外です。病棟へ貸し出す際は「設定（⚙️）＞ 機器マスタ」から移動してください。
+                  </span>
+                  <button
+                    onClick={() => setShowSettings(true)}
+                    className="px-2.5 py-1.5 bg-white border border-amber-300 rounded font-bold text-amber-800 hover:bg-amber-100 flex-shrink-0 transition-colors"
+                  >
+                    機器マスタを開く
+                  </button>
+                </div>
+              )}
               
               <div className="space-y-6 pb-24">
                 {groupedDevices ? (
                   // モニタごとにグルーピングして表示
-                  Object.entries(groupedDevices).map(([groupName, groupDevices]) => (
-                    <div key={groupName} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                      <div className="bg-gray-100 px-4 py-2 border-b border-gray-200 flex items-center gap-2">
-                        <Monitor size={16} className="text-gray-500" /><span className="font-bold text-sm text-gray-700 font-mono">{groupName}</span>
+                  Object.entries(groupedDevices).map(([groupName, groupDevices]) => {
+                    const isLoanerMonitor = loanerMonitorNames.has(groupName);
+                    return (
+                      <div key={groupName} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                        <div className="bg-gray-100 px-4 py-2 border-b border-gray-200 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <Monitor size={16} className="text-gray-500" />
+                            <span className="font-bold text-sm text-gray-700 font-mono">{groupName}</span>
+                            {isLoanerMonitor && !isStandbyWard(selectedWard) && (
+                              <span className="text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300 px-2 py-0.5 rounded-full">
+                                貸出機
+                              </span>
+                            )}
+                            {isStandbyWard(selectedWard) && (
+                              <span className="text-[11px] font-bold bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">
+                                待機中
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="divide-y divide-gray-100">
+                          {groupDevices.length > 0 ? groupDevices.map(device => (
+                            <DeviceRow 
+                              key={device.id} 
+                              device={device} 
+                              record={records[device.id]} 
+                              isExpanded={selectedDevice?.id === device.id}
+                              onToggle={() => toggleDevice(device)}
+                              onSave={handleSaveRecord}
+                              onDelete={handleDeleteRecord}
+                              onShowHistory={() => handleShowDeviceHistory(device)} 
+                              checker={currentStaff}
+                              isFirst={filteredDevices.length > 0 && filteredDevices[0].id === device.id}
+                              isLast={filteredDevices.length > 0 && filteredDevices[filteredDevices.length - 1].id === device.id}
+                              date={today}
+                            />
+                          )) : (
+                            <div className="p-4 text-center text-xs text-gray-400">送信機が登録されていません</div>
+                          )}
+                        </div>
                       </div>
-                      <div className="divide-y divide-gray-100">
-                        {groupDevices.length > 0 ? groupDevices.map(device => (
-                          <DeviceRow 
-                            key={device.id} 
-                            device={device} 
-                            record={records[device.id]} 
-                            isExpanded={selectedDevice?.id === device.id}
-                            onToggle={() => toggleDevice(device)}
-                            onSave={handleSaveRecord}
-                            onDelete={handleDeleteRecord}
-                            onShowHistory={() => handleShowDeviceHistory(device)} 
-                            checker={currentStaff}
-                            isFirst={filteredDevices.length > 0 && filteredDevices[0].id === device.id}
-                            isLast={filteredDevices.length > 0 && filteredDevices[filteredDevices.length - 1].id === device.id}
-                            date={today}
-                          />
-                        )) : (
-                          <div className="p-4 text-center text-xs text-gray-400">送信機が登録されていません</div>
-                        )}
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 ) : (
                   // グルーピングなし
                   <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden divide-y divide-gray-100">
@@ -621,7 +741,9 @@ function App() {
                       const wardChecked = wardDevices.filter(d => records[d.id]).length;
                       const wardProgress = wardTotal > 0 ? Math.round((wardChecked / wardTotal) * 100) : 0;
                       const isCurrent = ward === selectedWard;
-                      const isComplete = wardTotal > 0 && wardChecked === wardTotal;
+                      const isStandby = isStandbyWard(ward);
+                      const isComplete = !isStandby && wardTotal > 0 && wardChecked === wardTotal;
+                      const standbyMonitorCount = isStandby ? effectiveMonitors.filter(m => m.ward === ward).length : 0;
 
                       return (
                         <button
@@ -640,18 +762,24 @@ function App() {
                         >
                           <div className="flex items-center gap-2 min-w-0">
                             <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                              isCurrent ? 'bg-blue-600' : isComplete ? 'bg-green-500' : 'bg-gray-300'
+                              isCurrent ? 'bg-blue-600' : isStandby ? 'bg-gray-400' : isComplete ? 'bg-green-500' : 'bg-gray-300'
                             }`} />
                             <span className="text-sm truncate">{ward}</span>
                           </div>
-                          <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-                            <span className="text-xs text-gray-400 font-mono">{wardChecked}/{wardTotal}</span>
-                            <span className={`text-xs font-bold font-mono px-1.5 py-0.5 rounded ${
-                              isComplete ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
-                            }`}>
-                              {wardProgress}%
+                          {isStandby ? (
+                            <span className="text-[11px] font-bold bg-gray-100 text-gray-600 px-2 py-0.5 rounded flex-shrink-0 ml-2">
+                              待機 ({standbyMonitorCount}台)
                             </span>
-                          </div>
+                          ) : (
+                            <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                              <span className="text-xs text-gray-400 font-mono">{wardChecked}/{wardTotal}</span>
+                              <span className={`text-xs font-bold font-mono px-1.5 py-0.5 rounded ${
+                                isComplete ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                              }`}>
+                                {wardProgress}%
+                              </span>
+                            </div>
+                          )}
                         </button>
                       );
                     })}
@@ -681,9 +809,15 @@ function App() {
             >
               <MapPin size={18} className="text-blue-100 flex-shrink-0" />
               <span className="font-bold text-sm tracking-wide">{selectedWard}</span>
-              <span className="text-xs font-mono font-bold bg-white/20 px-2 py-0.5 rounded-full">
-                {filteredDevices.filter(d => records[d.id]).length}/{filteredDevices.length}
-              </span>
+              {isStandbyWard(selectedWard) ? (
+                <span className="text-xs font-bold bg-white/20 px-2 py-0.5 rounded-full">
+                  待機
+                </span>
+              ) : (
+                <span className="text-xs font-mono font-bold bg-white/20 px-2 py-0.5 rounded-full">
+                  {filteredDevices.filter(d => records[d.id]).length}/{filteredDevices.length}
+                </span>
+              )}
               <ChevronUp
                 size={18}
                 className={`text-blue-100 transition-transform duration-200 ${showWardMenu ? 'rotate-180' : ''}`}
@@ -1164,6 +1298,7 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
   const [monitorMode, setMonitorMode] = useState('EXISTING');
   const [newMonitorModel, setNewMonitorModel] = useState('');
   const [newMonitorSerial, setNewMonitorSerial] = useState('');
+  const [newMonitorIsLoaner, setNewMonitorIsLoaner] = useState(false);
   const [step3Tab, setStep3Tab] = useState('NEW'); // 'NEW' | 'MOVE_EXISTING'
   const [selectedMoveIds, setSelectedMoveIds] = useState([]);
   const [moveFilterWard, setMoveFilterWard] = useState('ALL');
@@ -1187,17 +1322,27 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
   const transmitterModelsList = useMemo(() => models.filter(m => m.type === 'TRANSMITTER'), [models]);
   const monitorModelsList = useMemo(() => models.filter(m => m.type === 'MONITOR'), [models]);
 
+  // 指定モニタが貸出機かどうか判定するヘルパー
+  const isMonitorLoaner = (ward, monitorName) => {
+    if (isStandbyWard(ward)) return true;
+    return monitorList.some(m => m.name === monitorName && m.isLoaner);
+  };
+
   // モニタマスタ用ドキュメントID生成・保存・削除ヘルパー
   const getMonitorDocId = (ward, monitorName) => encodeURIComponent(`${ward}__${monitorName}`);
 
-  const saveMonitorDoc = async (ward, monitorName) => {
+  const saveMonitorDoc = async (ward, monitorName, options = {}) => {
     const trimmedWard = (ward || '').trim();
     const trimmedMonitor = (monitorName || '').trim();
     if (!trimmedWard || !trimmedMonitor) return;
     const docId = getMonitorDocId(trimmedWard, trimmedMonitor);
+    const shouldBeLoaner = options.isLoaner !== undefined
+      ? Boolean(options.isLoaner)
+      : isMonitorLoaner(trimmedWard, trimmedMonitor);
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', docId), {
       ward: trimmedWard,
       name: trimmedMonitor,
+      isLoaner: shouldBeLoaner,
       isDeleted: false,
       updatedAt: getTodayString()
     });
@@ -1216,6 +1361,7 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', docId), {
       ward,
       name: monitorName,
+      isLoaner: isMonitorLoaner(ward, monitorName),
       isDeleted: true,
       deletedAt: getTodayString()
     });
@@ -1242,20 +1388,21 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
     return sorted.filter((d) => d.id.includes(filterText) || d.monitorGroup.includes(filterText) || d.ward.includes(filterText));
   }, [activeList, filterText]);
 
-  // 機器追加・移動時の病棟リストをマスタ順(wardListのsortOrder)にソート
+  // 機器追加・移動時の病棟リストをマスタ順(wardListのsortOrder)にソート（貸出機待機用の「ME室」を常時選択可能にする）
   const allWards = useMemo(() => {
     const uniqueWards = Array.from(new Set([
       ...activeList.map((d) => d.ward),
       ...monitorList.map((m) => m.ward),
-      ...wardList.map((w) => w.name)
+      ...wardList.map((w) => w.name),
+      'ME室'
     ])).filter(Boolean);
     
     return uniqueWards.sort((a, b) => {
       const wa = wardList.find(w => w.name === a);
       const wb = wardList.find(w => w.name === b);
       
-      const orderA = wa ? (wa.sortOrder ?? 9999) : 9999;
-      const orderB = wb ? (wb.sortOrder ?? 9999) : 9999;
+      const orderA = wa ? (wa.sortOrder ?? 9999) : (isStandbyWard(a) ? 99999 : 9999);
+      const orderB = wb ? (wb.sortOrder ?? 9999) : (isStandbyWard(b) ? 99999 : 9999);
       
       if (orderA !== orderB) return orderA - orderB;
       return a.localeCompare(b);
@@ -1281,6 +1428,7 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
     setMonitorMode('EXISTING');
     setNewMonitorModel(monitorModelsList.length > 0 ? monitorModelsList[0].name : '');
     setNewMonitorSerial('');
+    setNewMonitorIsLoaner(false);
     setStep3Tab(mode === 'MONITOR' ? 'MOVE_EXISTING' : 'NEW');
     setSelectedMoveIds([]);
     setMoveFilterWard('ALL');
@@ -1293,6 +1441,9 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
 
   const handleNextStep = () => {
     if (addStep === 1 && !newDeviceBase.ward) return alert('病棟を選択または入力してください');
+    if (addStep === 1 && isStandbyWard(newDeviceBase.ward)) {
+      setNewMonitorIsLoaner(true);
+    }
     if (addStep === 2) {
       if (monitorMode === 'EXISTING' && !newDeviceBase.monitorGroup) return alert('モニタを選択してください');
       if (monitorMode === 'NEW') {
@@ -1315,9 +1466,10 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
       return alert('モニタを選択してください');
     }
 
-    await saveMonitorDoc(newDeviceBase.ward, groupName);
+    const isLoanerFlag = newMonitorIsLoaner || isStandbyWard(newDeviceBase.ward);
+    await saveMonitorDoc(newDeviceBase.ward, groupName, { isLoaner: isLoanerFlag });
     setExpandedWards(prev => ({ ...prev, [newDeviceBase.ward]: true }));
-    alert(`モニタ「${newDeviceBase.ward} / ${groupName}」を単体で登録しました。\n（既存のモニタからchを選択して移動させることができます）`);
+    alert(`モニタ「${newDeviceBase.ward} / ${groupName}」${isLoanerFlag ? '（貸出機）' : ''}を単体で登録しました。\n（既存のモニタからchを選択して移動させることができます）`);
     setAddMode(null);
   };
 
@@ -1345,13 +1497,16 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
   const handleCompleteAdd = async () => {
     const validRows = deviceRows.filter(r => r.id.trim() !== '');
     const moveDevices = activeList.filter(d => selectedMoveIds.includes(d.id));
+    const isLoanerFlag = monitorMode === 'NEW'
+      ? (newMonitorIsLoaner || isStandbyWard(newDeviceBase.ward))
+      : isMonitorLoaner(newDeviceBase.ward, newDeviceBase.monitorGroup);
 
     // chが1件も入力・選択されていない場合
     if (validRows.length === 0 && moveDevices.length === 0) {
       if (addMode === 'MONITOR' || addMode === 'WARD' || monitorMode === 'NEW') {
-        await saveMonitorDoc(newDeviceBase.ward, newDeviceBase.monitorGroup);
+        await saveMonitorDoc(newDeviceBase.ward, newDeviceBase.monitorGroup, { isLoaner: isLoanerFlag });
         setExpandedWards(prev => ({ ...prev, [newDeviceBase.ward]: true }));
-        alert(`モニタ「${newDeviceBase.ward} / ${newDeviceBase.monitorGroup}」を単体で登録しました`);
+        alert(`モニタ「${newDeviceBase.ward} / ${newDeviceBase.monitorGroup}」${isLoanerFlag ? '（貸出機）' : ''}を単体で登録しました`);
         setAddMode(null);
         return;
       }
@@ -1402,7 +1557,7 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
     }
 
     // モニタ自体もマスタに保存（後から全chを他へ移動してもモニタが消えないように保持）
-    await saveMonitorDoc(newDeviceBase.ward, newDeviceBase.monitorGroup);
+    await saveMonitorDoc(newDeviceBase.ward, newDeviceBase.monitorGroup, { isLoaner: isLoanerFlag });
 
     let currentMaxSort = list.length > 0 ? Math.max(...list.map((d) => d.sortOrder || 0)) : 0;
 
@@ -1533,7 +1688,7 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
     setOriginalId('');
   };
 
-  // モニタ名変更・モニタごとの病棟移動（関連デバイス一括更新＋単体モニタ対応）
+  // モニタ名変更・モニタごとの病棟移動（関連デバイス一括更新＋単体モニタ＋貸出機フラグ対応）
   const handleUpdateMonitorName = async () => {
     if (!editingMonitor || !editingMonitor.model || !editingMonitor.serial.trim()) {
       return alert('モニタ型番と製造番号を入力してください');
@@ -1542,10 +1697,12 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
     if (!newWard) return alert('所属病棟を選択または入力してください');
 
     const newName = `${editingMonitor.model} (${editingMonitor.serial.trim()})`;
+    const nextIsLoaner = Boolean(editingMonitor.isLoaner || isStandbyWard(newWard));
     const isWardChanged = newWard !== editingMonitor.oldWard;
     const isNameChanged = newName !== editingMonitor.oldName;
+    const isLoanerChanged = nextIsLoaner !== Boolean(editingMonitor.oldIsLoaner);
 
-    if (!isWardChanged && !isNameChanged) {
+    if (!isWardChanged && !isNameChanged && !isLoanerChanged) {
       setEditingMonitor(null);
       return;
     }
@@ -1556,17 +1713,21 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
 
     const confirmMsg = isWardChanged
       ? `モニタ「${editingMonitor.oldName}」${targets.length > 0 ? `と紐付く送信機（${targets.length}台）` : ''}を\n「${editingMonitor.oldWard}」→「${newWard} / ${newName}」へ移動・更新します。\nよろしいですか？`
-      : `「${editingMonitor.oldName}」を「${newName}」に変更します。\n${targets.length > 0 ? `紐付いている全ての送信機（${targets.length}台）が更新されますが` : ''}よろしいですか？`;
+      : isNameChanged
+        ? `「${editingMonitor.oldName}」を「${newName}」に変更します。\n${targets.length > 0 ? `紐付いている全ての送信機（${targets.length}台）が更新されますが` : ''}よろしいですか？`
+        : `モニタ「${newName}」の設定を更新します。よろしいですか？`;
 
     if (!confirm(confirmMsg)) return;
 
     const batch = writeBatch(db);
-    targets.forEach((d) => {
-      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', d.id), {
-        ward: newWard,
-        monitorGroup: newName
+    if (isWardChanged || isNameChanged) {
+      targets.forEach((d) => {
+        batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', d.id), {
+          ward: newWard,
+          monitorGroup: newName
+        });
       });
-    });
+    }
 
     // モニタマスタ（monitorsコレクション）の更新
     const oldMonitorDocId = getMonitorDocId(editingMonitor.oldWard, editingMonitor.oldName);
@@ -1575,6 +1736,7 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
       batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', oldMonitorDocId), {
         ward: editingMonitor.oldWard,
         name: editingMonitor.oldName,
+        isLoaner: nextIsLoaner,
         isDeleted: true,
         deletedAt: getTodayString()
       });
@@ -1582,13 +1744,67 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
     batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', newMonitorDocId), {
       ward: newWard,
       name: newName,
+      isLoaner: nextIsLoaner,
       isDeleted: false,
       updatedAt: getTodayString()
     });
 
+    if (!wardList.some(w => w.name === newWard)) {
+      const maxWardSort = wardList.length > 0 ? Math.max(...wardList.map(w => w.sortOrder || 0)) : 0;
+      batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'wards', newWard), {
+        name: newWard,
+        sortOrder: maxWardSort + 1
+      });
+    }
+
     await batch.commit();
     setExpandedWards(prev => ({ ...prev, [newWard]: true }));
     setEditingMonitor(null);
+  };
+
+  // 貸出機モニタをワンタップで「ME室」へ返却するハンドラ
+  const handleReturnMonitorToME = async (ward, monitorName) => {
+    const targets = activeList.filter(d => d.ward === ward && d.monitorGroup === monitorName);
+    const confirmMsg = `貸出機モニタ「${monitorName}」${targets.length > 0 ? `（紐付く送信機 ${targets.length}台を含む）` : ''}を\n「${ward}」から「ME室（待機・点検対象外）」へ返却しますか？`;
+    if (!confirm(confirmMsg)) return;
+
+    const batch = writeBatch(db);
+    targets.forEach(d => {
+      batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'devices', d.id), {
+        ward: 'ME室',
+        monitorGroup: monitorName
+      });
+    });
+
+    const oldMonitorDocId = getMonitorDocId(ward, monitorName);
+    const newMonitorDocId = getMonitorDocId('ME室', monitorName);
+    if (oldMonitorDocId !== newMonitorDocId) {
+      batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', oldMonitorDocId), {
+        ward,
+        name: monitorName,
+        isLoaner: true,
+        isDeleted: true,
+        deletedAt: getTodayString()
+      });
+    }
+    batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'monitors', newMonitorDocId), {
+      ward: 'ME室',
+      name: monitorName,
+      isLoaner: true,
+      isDeleted: false,
+      updatedAt: getTodayString()
+    });
+
+    if (!wardList.some(w => w.name === 'ME室')) {
+      const maxWardSort = wardList.length > 0 ? Math.max(...wardList.map(w => w.sortOrder || 0)) : 0;
+      batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'wards', 'ME室'), {
+        name: 'ME室',
+        sortOrder: maxWardSort + 1
+      });
+    }
+
+    await batch.commit();
+    setExpandedWards(prev => ({ ...prev, 'ME室': true }));
   };
 
   // --- Device DnD Handlers (機器の並び替え) ---
@@ -1781,21 +1997,53 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
         </div>
         {addStep === 1 && (
           <div className="space-y-4 animate-fade-in">
-            <h4 className="font-bold text-gray-700">{addMode === 'WARD' ? '1. 新しい病棟名を入力してください' : '1. 対象の病棟を選択してください'}</h4>
+            <h4 className="font-bold text-gray-700">{addMode === 'WARD' ? '1. 新しい病棟名を入力してください' : '1. 対象の病棟（または待機場所）を選択してください'}</h4>
             {addMode !== 'WARD' && (
-              <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto">
-                {allWards.map(ward => <button key={ward} onClick={() => setNewDeviceBase({...newDeviceBase, ward})} className={`p-3 rounded border text-left ${newDeviceBase.ward === ward ? 'bg-blue-100 border-blue-500 text-blue-800 font-bold' : 'bg-white hover:bg-gray-50'}`}>{ward}</button>)}
+              <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+                {allWards.map(ward => {
+                  const standby = isStandbyWard(ward);
+                  return (
+                    <button
+                      key={ward}
+                      onClick={() => {
+                        setNewDeviceBase({...newDeviceBase, ward});
+                        setNewMonitorIsLoaner(standby);
+                      }}
+                      className={`p-3 rounded border text-left flex items-center justify-between gap-1 ${
+                        newDeviceBase.ward === ward
+                          ? 'bg-blue-100 border-blue-500 text-blue-800 font-bold'
+                          : standby
+                            ? 'bg-indigo-50/60 border-indigo-200 hover:bg-indigo-50 text-indigo-900'
+                            : 'bg-white hover:bg-gray-50'
+                      }`}
+                    >
+                      <span>{ward}</span>
+                      {standby && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 border border-indigo-200 whitespace-nowrap">
+                          貸出機待機・点検対象外
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
             {(addMode === 'WARD') && (
-              <div className="mt-4"><label className="text-xs text-gray-500 block mb-1">病棟名:</label><input className="w-full border p-2 rounded" placeholder="新しい病棟名..." value={newDeviceBase.ward} onChange={e => setNewDeviceBase({...newDeviceBase, ward: e.target.value})} autoFocus/></div>
+              <div className="mt-4"><label className="text-xs text-gray-500 block mb-1">病棟名:</label><input className="w-full border p-2 rounded" placeholder="新しい病棟名（例: ME室、5F北 など）..." value={newDeviceBase.ward} onChange={e => setNewDeviceBase({...newDeviceBase, ward: e.target.value})} autoFocus/></div>
             )}
           </div>
         )}
         {addStep === 2 && (
           <div className="space-y-4 animate-fade-in">
             <h4 className="font-bold text-gray-700">{addMode === 'MONITOR' ? '2. 新しいモニタ情報を入力してください' : '2. モニタ(親機)を選択してください'}</h4>
-            <p className="text-sm text-gray-500 mb-2">選択中の病棟: {newDeviceBase.ward}</p>
+            <p className="text-sm text-gray-500 mb-2 flex items-center gap-2">
+              <span>選択中の病棟: <strong>{newDeviceBase.ward}</strong></span>
+              {isStandbyWard(newDeviceBase.ward) && (
+                <span className="text-xs font-bold px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 border border-indigo-200">
+                  待機中は本日の点検対象外
+                </span>
+              )}
+            </p>
             {addMode !== 'MONITOR' && (
               <div className="flex bg-gray-100 p-1 rounded-lg mb-4">
                 <button onClick={() => setMonitorMode('EXISTING')} className={`flex-1 py-2 rounded-md text-sm font-bold transition-all ${monitorMode === 'EXISTING' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}>既存から選択</button>
@@ -1816,6 +2064,21 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
                   <div><label className="block text-xs font-bold text-gray-700 mb-1">モニタ型番</label><select className="w-full border p-2 rounded bg-white" value={newMonitorModel} onChange={e => setNewMonitorModel(e.target.value)}><option value="">選択してください</option>{monitorModelsList.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
                   <div><label className="block text-xs font-bold text-gray-700 mb-1">製造番号</label><input className="w-full border p-2 rounded bg-white" placeholder="例: 01677" value={newMonitorSerial} onChange={e => setNewMonitorSerial(e.target.value)}/></div>
                 </div>
+                <label className="flex items-start gap-2.5 p-2.5 bg-indigo-50/70 border border-indigo-200 rounded-md cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                    checked={newMonitorIsLoaner || isStandbyWard(newDeviceBase.ward)}
+                    disabled={isStandbyWard(newDeviceBase.ward)}
+                    onChange={e => setNewMonitorIsLoaner(e.target.checked)}
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-indigo-900">貸出機モニタとして登録する</span>
+                    <p className="text-indigo-700 mt-0.5">
+                      ME室で待機中は本日の点検対象外になり、病棟へ貸出（移動）した際は「貸出機」バッジとワンタップ返却ボタンが表示されます。
+                    </p>
+                  </div>
+                </label>
                 <p className="text-xs text-gray-500">
                   ※chを登録せずモニタ単体で登録する場合は下の「モニタ単体で登録」を押してください。既存の他モニタからchを選んで移動させる場合や新規chを入力する場合は「次へ」進んでください。
                 </p>
@@ -2216,15 +2479,20 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
         </div>
       )}
 
-      {/* モニタ情報編集・病棟移動モーダル */}
+      {/* モニタ情報編集・病棟移動（貸出／返却）モーダル */}
       {editingMonitor && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/20 backdrop-blur-[1px] p-4">
           <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md border space-y-4">
-            <h3 className="font-bold text-lg flex items-center gap-2"><Edit2 size={20} className="text-green-600"/> モニタ情報の編集・病棟移動</h3>
+            <h3 className="font-bold text-lg flex items-center gap-2">
+              <Edit2 size={20} className={editingMonitor.loanOutMode ? 'text-indigo-600' : 'text-green-600'}/>
+              {editingMonitor.loanOutMode ? '貸出機モニタを病棟へ貸出（移動）' : 'モニタ情報の編集・病棟移動'}
+            </h3>
             
             <div>
               <div className="flex justify-between items-center mb-1">
-                <label className="block text-xs font-bold text-gray-700">所属病棟 (モニタごと移動)</label>
+                <label className="block text-xs font-bold text-gray-700">
+                  {editingMonitor.loanOutMode ? '貸出先の病棟' : '所属病棟 (モニタごと移動)'}
+                </label>
                 <button
                   type="button"
                   onClick={() => {
@@ -2253,7 +2521,11 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
                   value={editingMonitor.ward}
                   onChange={e => setEditingMonitor({ ...editingMonitor, ward: e.target.value })}
                 >
-                  {allWards.map(w => <option key={w} value={w}>{w}</option>)}
+                  {allWards.map(w => (
+                    <option key={w} value={w}>
+                      {w}{isStandbyWard(w) ? '（待機・点検対象外）' : ''}
+                    </option>
+                  ))}
                 </select>
               )}
             </div>
@@ -2262,13 +2534,32 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
               <div><label className="block text-xs font-bold text-gray-700 mb-1">モニタ型番</label><select className="w-full border p-2 rounded bg-white" value={editingMonitor.model} onChange={e => setEditingMonitor({...editingMonitor, model: e.target.value})}>{monitorModelsList.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
               <div><label className="block text-xs font-bold text-gray-700 mb-1">製造番号</label><input className="w-full border p-2 rounded bg-white" value={editingMonitor.serial} onChange={e => setEditingMonitor({...editingMonitor, serial: e.target.value})}/></div>
             </div>
+
+            <label className="flex items-start gap-2.5 p-2.5 bg-indigo-50/70 border border-indigo-200 rounded-md cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                checked={Boolean(editingMonitor.isLoaner || isStandbyWard(editingMonitor.ward))}
+                disabled={isStandbyWard(editingMonitor.ward)}
+                onChange={e => setEditingMonitor({ ...editingMonitor, isLoaner: e.target.checked })}
+              />
+              <div className="text-xs">
+                <span className="font-bold text-indigo-900">貸出機モニタとして扱う</span>
+                <p className="text-indigo-700 mt-0.5">
+                  病棟へ貸出中も「貸出機」バッジが表示され、ワンタップでME室へ返却できます。
+                </p>
+              </div>
+            </label>
+
             <div className="mt-2 text-center bg-gray-50 p-3 rounded border">
               <div className="text-xs text-gray-400 mb-1">更新後の所属・モニタ名</div>
               <div className="font-mono text-sm font-bold text-gray-800">{editingMonitor.ward || '(未入力)'} / {editingMonitor.model} ({editingMonitor.serial})</div>
             </div>
             <div className="flex justify-end gap-2 pt-2 border-t">
                <button onClick={() => setEditingMonitor(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
-               <button onClick={handleUpdateMonitorName} className="px-4 py-2 bg-blue-600 text-white rounded font-bold hover:bg-blue-700">一括更新</button>
+               <button onClick={handleUpdateMonitorName} className="px-4 py-2 bg-blue-600 text-white rounded font-bold hover:bg-blue-700">
+                 {editingMonitor.loanOutMode ? 'この病棟へ貸出する' : '一括更新'}
+               </button>
             </div>
           </div>
         </div>
@@ -2278,10 +2569,11 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
         {/* 病棟ごとのリスト (並び替え対応) */}
         {sortedWards.map((ward) => {
           const monitorGroups = devicesByWardAndMonitor[ward];
+          const standbyWard = isStandbyWard(ward);
           return (
             <div 
               key={ward} 
-              className="border rounded-lg bg-white overflow-hidden shadow-sm transition-all"
+              className={`border rounded-lg bg-white overflow-hidden shadow-sm transition-all ${standbyWard ? 'border-indigo-200' : ''}`}
               draggable="true"
               onDragStart={(e) => handleWardDragStart(e, ward)}
               onDragOver={handleDragOver}
@@ -2292,16 +2584,23 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
               data-ward-name={ward}
             >
               <div 
-                className="w-full p-3 bg-gray-50 flex justify-between items-center hover:bg-gray-100 transition-colors cursor-move"
+                className={`w-full p-3 flex justify-between items-center transition-colors cursor-move ${
+                  standbyWard ? 'bg-indigo-50/70 hover:bg-indigo-100/70' : 'bg-gray-50 hover:bg-gray-100'
+                }`}
                 onClick={() => toggleWard(ward)}
               >
                 <div className="flex items-center gap-3">
                     <div className="flex items-center gap-2 pointer-events-none">
                         <Menu size={16} className="text-gray-400"/>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <MapPin size={18} className="text-blue-500"/>
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <MapPin size={18} className={standbyWard ? 'text-indigo-600' : 'text-blue-500'}/>
                         <span className="font-bold text-gray-800">{ward}</span>
+                        {standbyWard && (
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200">
+                            貸出機待機場所（本日の点検対象外）
+                          </span>
+                        )}
                     </div>
                 </div>
                 
@@ -2312,62 +2611,104 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
               
               {expandedWards[ward] && (
                 <div className="p-3 bg-white space-y-4 animate-slide-up">
-                  {Object.entries(monitorGroups).map(([monitorName, monitorDevices]) => (
-                    <div key={monitorName} className="border rounded-md overflow-hidden">
-                      <div className="bg-gray-100 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 text-sm font-bold text-gray-700">
-                          <Monitor size={14} className="text-green-600"/>
-                          <span>{monitorName}</span>
-                          <span className="text-xs font-normal text-gray-500 bg-white px-1.5 py-0.5 rounded border">
-                            {monitorDevices.length}台
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => {
-                              const defaultModel = transmitterModelsList.length > 0 ? transmitterModelsList[0].name : '';
-                              setNewDeviceBase({ ward, monitorGroup: monitorName });
-                              setDeviceRows([{ id: '', model: defaultModel }]);
-                              setMonitorMode('EXISTING');
-                              setSelectedMoveIds([]);
-                              setMoveFilterWard('ALL');
-                              setMoveSearchText('');
-                              setStep3Tab('MOVE_EXISTING');
-                              setAddMode('DEVICE');
-                              setAddStep(3);
-                            }}
-                            className="text-xs flex items-center gap-1 bg-white border border-green-300 px-2 py-1 rounded hover:bg-green-50 text-green-700 font-bold transition-colors"
-                            title="他モニタからchを移動または新規追加"
-                          >
-                            <Plus size={12}/> ch移動・追加
-                          </button>
-                          <button
-                            onClick={() => {
-                              const match = monitorName.match(/^(.+)\s\((.+)\)$/);
-                              setEditingMonitor({
-                                oldWard: ward,
-                                ward: ward,
-                                wardMode: 'EXISTING',
-                                oldName: monitorName,
-                                model: match ? match[1] : monitorName,
-                                serial: match ? match[2] : ''
-                              });
-                            }}
-                            className="text-xs flex items-center gap-1 bg-white border px-2 py-1 rounded hover:bg-blue-50 text-blue-600 transition-colors"
-                          >
-                            <Edit2 size={12}/> 編集・移動
-                          </button>
-                          {monitorDevices.length === 0 && (
+                  {Object.entries(monitorGroups).map(([monitorName, monitorDevices]) => {
+                    const loanerMonitor = isMonitorLoaner(ward, monitorName);
+                    return (
+                      <div key={monitorName} className={`border rounded-md overflow-hidden ${loanerMonitor ? 'border-indigo-200' : ''}`}>
+                        <div className={`px-3 py-2 flex flex-wrap items-center justify-between gap-2 ${loanerMonitor ? 'bg-indigo-50/60' : 'bg-gray-100'}`}>
+                          <div className="flex items-center gap-2 text-sm font-bold text-gray-700 flex-wrap">
+                            <Monitor size={14} className={loanerMonitor ? 'text-indigo-600' : 'text-green-600'}/>
+                            <span>{monitorName}</span>
+                            {loanerMonitor && (
+                              <span className="text-[11px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 border border-indigo-200">
+                                {standbyWard ? '貸出機（待機中）' : '貸出機'}
+                              </span>
+                            )}
+                            <span className="text-xs font-normal text-gray-500 bg-white px-1.5 py-0.5 rounded border">
+                              {monitorDevices.length}台
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {standbyWard && (
+                              <button
+                                onClick={() => {
+                                  const match = monitorName.match(/^(.+)\s\((.+)\)$/);
+                                  const firstRegularWard = allWards.find(w => !isStandbyWard(w)) || ward;
+                                  setEditingMonitor({
+                                    oldWard: ward,
+                                    ward: firstRegularWard,
+                                    wardMode: 'EXISTING',
+                                    oldName: monitorName,
+                                    model: match ? match[1] : monitorName,
+                                    serial: match ? match[2] : '',
+                                    isLoaner: true,
+                                    oldIsLoaner: loanerMonitor,
+                                    loanOutMode: true
+                                  });
+                                }}
+                                className="text-xs flex items-center gap-1 bg-indigo-600 text-white px-2.5 py-1 rounded hover:bg-indigo-700 font-bold transition-colors shadow-sm"
+                                title="貸出先の病棟を選択して移動"
+                              >
+                                <ArrowRight size={12}/> 病棟へ貸出
+                              </button>
+                            )}
+                            {!standbyWard && loanerMonitor && (
+                              <button
+                                onClick={() => handleReturnMonitorToME(ward, monitorName)}
+                                className="text-xs flex items-center gap-1 bg-indigo-50 border border-indigo-300 text-indigo-700 px-2.5 py-1 rounded hover:bg-indigo-100 font-bold transition-colors"
+                                title="ME室（待機場所）へワンタップで返却"
+                              >
+                                <ArrowLeft size={12}/> ME室へ返却
+                              </button>
+                            )}
                             <button
-                              onClick={() => handleDeleteEmptyMonitor(ward, monitorName)}
-                              className="text-xs flex items-center gap-1 bg-white border border-red-200 px-2 py-1 rounded hover:bg-red-50 text-red-600 transition-colors"
-                              title="空のモニタを削除"
+                              onClick={() => {
+                                const defaultModel = transmitterModelsList.length > 0 ? transmitterModelsList[0].name : '';
+                                setNewDeviceBase({ ward, monitorGroup: monitorName });
+                                setDeviceRows([{ id: '', model: defaultModel }]);
+                                setMonitorMode('EXISTING');
+                                setSelectedMoveIds([]);
+                                setMoveFilterWard('ALL');
+                                setMoveSearchText('');
+                                setStep3Tab('MOVE_EXISTING');
+                                setAddMode('DEVICE');
+                                setAddStep(3);
+                              }}
+                              className="text-xs flex items-center gap-1 bg-white border border-green-300 px-2 py-1 rounded hover:bg-green-50 text-green-700 font-bold transition-colors"
+                              title="他モニタからchを移動または新規追加"
                             >
-                              <Trash2 size={12}/>
+                              <Plus size={12}/> ch移動・追加
                             </button>
-                          )}
+                            <button
+                              onClick={() => {
+                                const match = monitorName.match(/^(.+)\s\((.+)\)$/);
+                                setEditingMonitor({
+                                  oldWard: ward,
+                                  ward: ward,
+                                  wardMode: 'EXISTING',
+                                  oldName: monitorName,
+                                  model: match ? match[1] : monitorName,
+                                  serial: match ? match[2] : '',
+                                  isLoaner: loanerMonitor,
+                                  oldIsLoaner: loanerMonitor,
+                                  loanOutMode: false
+                                });
+                              }}
+                              className="text-xs flex items-center gap-1 bg-white border px-2 py-1 rounded hover:bg-blue-50 text-blue-600 transition-colors"
+                            >
+                              <Edit2 size={12}/> 編集・移動
+                            </button>
+                            {monitorDevices.length === 0 && (
+                              <button
+                                onClick={() => handleDeleteEmptyMonitor(ward, monitorName)}
+                                className="text-xs flex items-center gap-1 bg-white border border-red-200 px-2 py-1 rounded hover:bg-red-50 text-red-600 transition-colors"
+                                title="空のモニタを削除"
+                              >
+                                <Trash2 size={12}/>
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
                       <div className="divide-y divide-gray-100 relative">
                         {monitorDevices.length > 0 ? monitorDevices.map(d => (
                           <div 
@@ -2400,7 +2741,8 @@ function DeviceMasterEditor({ list, models, wardList, monitorList = [], onSave, 
                         )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2953,9 +3295,9 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
               locationMap.get(key).records.push(r);
           });
 
-          // 現在の所属病棟・モニタがまだ含まれていない場合は追加
+          // 現在の所属病棟・モニタがまだ含まれていない場合は追加（待機場所・ME室で点検実績0件の空行は除外）
           const currentKey = `${device.ward}___${device.monitorGroup}`;
-          if (!locationMap.has(currentKey)) {
+          if (!locationMap.has(currentKey) && !isStandbyWard(device.ward)) {
               locationMap.set(currentKey, {
                   ward: device.ward,
                   monitorGroup: device.monitorGroup,
