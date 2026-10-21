@@ -3750,7 +3750,6 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
                                                       const deviceMaster = devices.find(d => d.id === r.deviceId);
                                                       const isDeletedOnThatDay = isDeviceDeletedOnDate(deviceMaster, r.date);
                                                       const isDeletedLater = !isDeletedOnThatDay && (!deviceMaster || !!deviceMaster.isDeleted);
-                                                      const isMovedDevice = deviceMaster && !deviceMaster.isDeleted && (deviceMaster.ward !== r.ward || deviceMaster.monitorGroup !== r.monitorGroup);
     
                                                       return (
                                                         <div key={i} className={`p-3 text-sm flex flex-col gap-2 hover:bg-gray-50 ${isIssue ? 'bg-red-50/50' : ''}`}>
@@ -3764,9 +3763,6 @@ function HistoryModal({ db, appId, devices, wardList, onClose, onDownloadCSV }) 
                                                                 )}
                                                                 {isDeletedLater && (
                                                                     <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded border border-gray-300">現在: 削除済 ({deviceMaster?.deletedAt})</span>
-                                                                )}
-                                                                {isMovedDevice && (
-                                                                    <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200">現在: {deviceMaster.ward}</span>
                                                                 )}
                                                             </div>
                                                             <div className="flex items-center gap-4">
